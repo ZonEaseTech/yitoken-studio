@@ -16,21 +16,22 @@ const fixture = `<!doctype html><html lang="en"><head><meta name="viewport" cont
 let server, browser, profile, socket, base, sequence = 0;
 const pending = new Map();
 const requests = [];
-function send(method, params = {}) {
+const networkRequests = [];
+function send(method, params = {}, sessionId) {
   return new Promise((resolve, reject) => {
     const id = ++sequence;
     const timeout = setTimeout(() => { pending.delete(id); reject(Error(`CDP timeout ${method}`)); }, 15000);
     pending.set(id, m => { clearTimeout(timeout); m.error ? reject(Error(JSON.stringify(m.error))) : resolve(m.result); });
-    socket.send(JSON.stringify({ id, method, params }));
+    socket.send(JSON.stringify({ id, method, params, sessionId }));
   });
 }
-async function evaluate(expression) {
-  const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+async function evaluate(expression, sessionId) {
+  const result = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, sessionId);
   if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails));
   return result.result.value;
 }
-async function waitFor(expression) {
-  return evaluate(`new Promise((resolve,reject)=>{const end=Date.now()+5000;function check(){if(${expression})return resolve(true);if(Date.now()>end)return reject(Error('Expected DOM state: '+${JSON.stringify(expression)}));setTimeout(check,20)}check()})`);
+async function waitFor(expression, sessionId) {
+  return evaluate(`new Promise((resolve,reject)=>{const end=Date.now()+5000;function check(){if(${expression})return resolve(true);if(Date.now()>end)return reject(Error('Expected DOM state: '+${JSON.stringify(expression)}));setTimeout(check,20)}check()})`, sessionId);
 }
 async function navigate(path = '/') {
   await send('Page.navigate', { url: base + path });
@@ -41,6 +42,12 @@ before(async () => {
     const path = new URL(req.url, 'http://localhost').pathname;
     requests.push({ path, method: req.method, document: req.headers['sec-fetch-dest'] === 'document' });
     if (path === '/site-entry.mjs') { res.setHeader('Content-Type', 'text/javascript'); res.end(await readFile(new URL('./site-entry.mjs', import.meta.url))); }
+    else if (path === '/studio-guide.mjs') {
+      try { res.setHeader('Content-Type', 'text/javascript'); res.end(await readFile(new URL('../studio-guide/studio-guide.mjs', import.meta.url))); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; res.statusCode = 404; res.end('not implemented'); }
+    }
+    else if (path === '/studio') { res.setHeader('Content-Type', 'text/html'); res.end(studioFixture); }
+    else if (path === '/studio-host') { res.setHeader('Content-Type', 'text/html'); res.end(`<!doctype html><style>body{margin:0}iframe{border:0;width:100vw;height:100vh}</style><iframe src="http://localhost:${server.address().port}/studio?fixture=do-not-forward#fixture-fragment"></iframe>`); }
     else if (path === '/downloads/') { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Downloads destination</title><h1>Native document download page</h1>'); }
     else if (path === '/') { res.setHeader('Content-Type', 'text/html'); res.end(fixture); }
     else { res.statusCode = 404; res.end('not found'); }
@@ -58,8 +65,19 @@ before(async () => {
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   socket = new WebSocket(targets.find(target => target.type === 'page').webSocketDebuggerUrl);
   await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
-  socket.addEventListener('message', event => { const m = JSON.parse(event.data); if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } });
+  socket.addEventListener('message', event => {
+    const m = JSON.parse(event.data);
+    if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+    if (m.method === 'Network.requestWillBeSent') networkRequests.push(m.params);
+    if (m.method === 'Fetch.requestPaused') send('Fetch.fulfillRequest', {
+      requestId: m.params.requestId, responseCode: 200,
+      responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+      body: Buffer.from('<!doctype html><title>Downloads destination</title><h1>Native document download page</h1>').toString('base64'),
+    }, m.sessionId).catch(error => { throw error; });
+  });
   await send('Page.enable');
+  await send('Network.enable');
+  await send('Fetch.enable', { patterns: [{ urlPattern: 'https://yitoken.com.cn/downloads/', resourceType: 'Document', requestStage: 'Request' }] });
 });
 after(async () => {
   socket?.close();
@@ -147,4 +165,93 @@ test('cleanup removes only injected entries and leaves original content availabl
   await evaluate(`globalThis.YitokenSiteDownloadEntries.stop()`);
   const result = await evaluate(`({nav:document.querySelectorAll('a[href="/downloads/"]').length,cards:document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('[data-yitoken-download-card]').length,source:document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('a[href="/source/"]').length,studio:document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('[data-existing-business]').length,attribution:document.body.innerText.includes('New API / QuantumNous')})`);
   assert.deepEqual(result, { nav: 0, cards: 0, source: 7, studio: 7, attribution: true });
+});
+
+const studioToolbar = `<div class="flex items-center gap-2 border-b border-zinc-200 px-6 py-3 dark:border-zinc-800"><button class="rounded-md px-3 py-1.5 text-sm">图片</button><button class="rounded-md px-3 py-1.5 text-sm">视频</button><a class="ml-auto text-xs text-zinc-400 hover:text-lime-600" href="https://yitoken.com.cn/usage-logs/task" target="_blank" rel="noreferrer">任务日志 ↗</a></div>`;
+const studioFixture = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>*{box-sizing:border-box}body{margin:0;font:16px Arial}.flex{display:flex}.h-screen{height:100vh}.w-80{width:320px}.shrink-0{flex-shrink:0}.flex-col{flex-direction:column}.flex-1{flex:1 1 0%}.min-w-0{min-width:0}.gap-2{gap:8px}.items-center{align-items:center}.border-b{border-bottom:1px solid #ddd}.px-6{padding-left:24px;padding-right:24px}.py-3{padding-top:12px;padding-bottom:12px}.px-3{padding-left:12px;padding-right:12px}.py-1\\.5{padding-top:6px;padding-bottom:6px}.text-sm{font-size:14px;line-height:20px}.text-xs{font-size:12px;line-height:16px}.ml-auto{margin-left:auto}.overflow-y-auto{overflow-y:auto}button{font:inherit;border:0;white-space:nowrap}a{white-space:nowrap}</style><div id="root"><div class="flex h-screen bg-white text-zinc-800"><aside class="flex w-80 shrink-0 flex-col"><h1>灵感创作</h1><label>令牌<input value="fixture-key-do-not-read"></label></aside><main class="flex min-w-0 flex-1 flex-col">${studioToolbar}<div class="flex-1 overflow-y-auto px-6 py-4">原结果保存提示</div><div class="border-t"><textarea>原提示词</textarea><button>生成</button></div></main></div></div><script>window.originalToolbar=${JSON.stringify(studioToolbar)};window.originalControls=[...document.querySelectorAll('aside,input,textarea,button')];window.originalClicks=0;document.querySelector('main button').onclick=()=>window.originalClicks++;Object.defineProperty(window,'localStorage',{get(){throw Error('must not read credentials')}});Object.defineProperty(document,'cookie',{get(){throw Error('must not read cookies')}});window.fetch=()=>{throw Error('must not send API/analytics')};window.XMLHttpRequest=function(){throw Error('must not send API/analytics')};</script><script type="module" src="/studio-guide.mjs"></script></html>`;
+async function navigateStudio() {
+  await send('Page.navigate', { url: base + '/studio' });
+  await waitFor(`document.readyState==='complete' && !!document.querySelector('main')`);
+}
+const studioLanguages = {
+  'zh-CN': '下载桌面版', 'zh-TW': '下載桌面版', en: 'Download desktop app',
+  fr: 'Télécharger l’application', ru: 'Скачать приложение', ja: 'デスクトップ版をダウンロード', vi: 'Tải ứng dụng máy tính',
+};
+test('studio adds one compact native top link next to task logs without replacing business controls', async () => {
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  await navigateStudio(); await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  const result = await evaluate(`(()=>{const a=document.querySelector('[data-yitoken-studio-guide]');return {count:document.querySelectorAll('[data-yitoken-studio-guide]').length,href:a.getAttribute('href'),target:a.target,previous:a.previousElementSibling.textContent,toolbar:a.parentElement===document.querySelector('main').firstElementChild,controls:window.originalControls.every(n=>n.isConnected),parent:document.querySelector('main').children.length,linkHeight:a.getBoundingClientRect().height}})()`);
+  assert.deepEqual({ ...result, linkHeight: undefined }, { count: 1, href: 'https://yitoken.com.cn/downloads/', target: '_top', previous: '任务日志 ↗', toolbar: true, controls: true, parent: 3, linkHeight: undefined });
+  assert.ok(result.linkHeight <= 32);
+  const appearance = await evaluate(`(()=>{const s=getComputedStyle(document.querySelector('[data-yitoken-studio-guide]'));return {color:s.color,background:s.backgroundColor,border:s.borderTopWidth,height:s.height}})()`);
+  assert.deepEqual(appearance, { color: 'rgb(63, 98, 18)', background: 'rgb(247, 254, 231)', border: '1px', height: '28px' });
+  await evaluate(`document.documentElement.classList.add('dark')`);
+  assert.deepEqual(await evaluate(`(()=>{const s=getComputedStyle(document.querySelector('[data-yitoken-studio-guide]'));return [s.color,s.backgroundColor,s.borderTopColor]})()`), ['rgb(190, 242, 100)', 'rgb(26, 46, 5)', 'rgb(63, 98, 18)']);
+  await evaluate(`document.documentElement.classList.remove('dark')`);
+  await evaluate(`document.querySelector('main button').click()`);
+  assert.equal(await evaluate(`window.originalClicks`), 1);
+  assert.equal(networkRequests.filter(r=>r.documentURL?.includes('/studio') && !r.request.url.startsWith(base)).length, 0, 'Guide does not initiate external requests');
+});
+test('studio seven language labels follow document language, preserving toolbar/left form/prompt geometry', async () => {
+  await navigateStudio(); await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  for (const width of [390, 768, 1280]) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
+    for (const [lang, text] of Object.entries(studioLanguages)) {
+      await evaluate(`document.documentElement.lang=${JSON.stringify(lang)}`);
+      await waitFor(`document.querySelector('[data-yitoken-studio-guide]')?.textContent===${JSON.stringify(text)}`);
+      const baseline = await evaluate(`(()=>{YitokenStudioGuide.stop();const nodes=[document.querySelector('aside'),document.querySelector('main').firstElementChild,document.querySelector('main').lastElementChild,...document.querySelectorAll('main button')];return {geometry:nodes.map(n=>{const r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}),overflow:document.documentElement.scrollWidth}})()`);
+      await evaluate(`import('/studio-guide.mjs').then(m=>m.startStudioGuide(document))`);
+      await waitFor(`document.querySelector('[data-yitoken-studio-guide]')?.textContent===${JSON.stringify(text)}`);
+      const result = await evaluate(`(()=>{const nodes=[document.querySelector('aside'),document.querySelector('main').firstElementChild,document.querySelector('main').lastElementChild,...document.querySelectorAll('main button')];const link=document.querySelector('[data-yitoken-studio-guide]');return {geometry:nodes.map(n=>{const r=n.getBoundingClientRect();return [r.x,r.y,r.width,r.height]}),overflow:document.documentElement.scrollWidth,linkVisible:!!link.getBoundingClientRect().width}})()`);
+      assert.deepEqual(result.geometry, baseline.geometry, `${lang}/${width}: original controls must not resize or move`);
+      assert.equal(result.overflow, baseline.overflow, `${lang}/${width}: no additional page overflow`);
+      if (width >= 768) assert.equal(result.linkVisible, true);
+    }
+  }
+});
+test('studio rerender/unmount/stop recover or remove only module-owned nodes and remain idempotent', async () => {
+  await navigateStudio(); await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  await evaluate(`document.querySelector('main').firstElementChild.outerHTML=window.originalToolbar`);
+  await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  await evaluate(`YitokenStudioGuide.refresh();YitokenStudioGuide.refresh();import('/studio-guide.mjs').then(m=>m.startStudioGuide(document))`);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-yitoken-studio-guide]').length`), 1);
+  await evaluate(`window.detached=document.querySelector('main');detached.remove()`);
+  await waitFor(`!window.detached.querySelector('[data-yitoken-studio-guide]')`);
+  await evaluate(`document.querySelector('#root>.flex').append(window.detached)`);
+  await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  await evaluate(`YitokenStudioGuide.stop();YitokenStudioGuide.stop();document.documentElement.lang='en'`);
+  assert.equal(await evaluate(`document.querySelectorAll('[data-yitoken-studio-guide],style[data-yitoken-studio-guide-style]').length`), 0);
+  assert.equal(await evaluate(`document.querySelector('main').firstElementChild.outerHTML===window.originalToolbar`), true);
+  assert.equal(await evaluate(`YitokenStudioGuide.active`), false);
+});
+test('studio unknown markup fails closed rather than inserting beside arbitrary controls', async () => {
+  await navigateStudio(); await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`);
+  await evaluate(`document.querySelector('main').firstElementChild.className='unrelated-toolbar'`);
+  await waitFor(`!document.querySelector('[data-yitoken-studio-guide]')`);
+  assert.equal(await evaluate(`document.querySelectorAll('main button').length`), 3);
+});
+test('cross-origin studio iframe normal click performs native same-tab top-level Document GET without credentials', async () => {
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  await send('Page.navigate', { url: base + '/studio-host' });
+  let child;
+  for (let attempt=0;attempt<100;attempt++) {
+    child=(await send('Target.getTargets')).targetInfos.find(t=>t.type==='iframe' && t.url.includes('/studio'));
+    if (child) break;
+    await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  assert.ok(child, 'Real cross-origin child target must exist');
+  assert.notEqual(new URL(child.url).origin, new URL(base).origin);
+  const {sessionId}=await send('Target.attachToTarget',{targetId:child.targetId,flatten:true});
+  await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`, sessionId);
+  const before=(await send('Target.getTargets')).targetInfos.filter(t=>t.type==='page').length;
+  const prior=networkRequests.length;
+  const position=await evaluate(`(()=>{const r=document.querySelector('[data-yitoken-studio-guide]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,sessionId);
+  await send('Input.dispatchMouseEvent',{type:'mousePressed',...position,button:'left',clickCount:1});
+  await send('Input.dispatchMouseEvent',{type:'mouseReleased',...position,button:'left',clickCount:1});
+  await waitFor(`location.href==='https://yitoken.com.cn/downloads/' && document.title==='Downloads destination'`);
+  const navigation=networkRequests.slice(prior).filter(r=>r.type==='Document' && r.request.url==='https://yitoken.com.cn/downloads/');
+  assert.equal(navigation.length,1); assert.equal(navigation[0].request.method,'GET');
+  assert.equal(navigation[0].request.headers.Referer,undefined,'Native link must not disclose the studio URL');
+  assert.equal((await send('Target.getTargets')).targetInfos.filter(t=>t.type==='page').length,before);
+  assert.equal((await send('Page.getFrameTree')).frameTree.frame.url,'https://yitoken.com.cn/downloads/');
 });

@@ -26,6 +26,12 @@ Responses are streamed, not downloaded to disk or buffered in memory as full ins
 
 **Integrity limit:** metadata is pinned from release asset names, byte sizes and SHA-256 digests. The relay checks status, size, encoding and range before sending a body; it does not claim to hash a 200 MiB installer before streaming. Users must verify the completed download's SHA-256 locally using `SHA256SUMS-GITHUB.txt`. This corrected checklist covers public GitHub-normalized filenames; the original SHA256SUMS.txt remains an audit artifact only.
 
+## Public download page
+
+The embedded, script-free green download portal has a short product introduction, a manual `#platforms` system selector, four platform cards with six installer links, and three usage steps. It performs no device detection or automatic downloads. The release remains `0.1.0-alpha.1`, explicitly prerelease and not stable. Installer filenames, byte sizes, SHA-256 digests, manifest/version documents, fixed allowlist and CSP are unchanged. SHA-256 verification, the corrected checklist and both ordinary AGPL corresponding-source links remain available.
+
+The former first-screen installation-warning banner is removed. Its alpha release, unsigned/unnotarized-package status, existing test acceptance limits, export constraints and privacy/API-Key safeguards remain in native collapsed details, together with Moyin Creator attribution and GPL/AGPL licensing information. Expanding these sections does not request an API, read credentials or start a download. The API-Key link goes to the existing `/keys` page; voluntary generation may charge the user's own account, while local concatenation adds no AI-generation charge.
+
 ## Source and deployment safety
 
 `package-source.sh` deterministically packs this directory's source, tests, module, metadata, page, README, Dockerfile, license and packaging script, excluding itself as an archive, executable, caches and unrelated internal files. The package is embedded; regenerate after any source/metadata/page modification **before** tests/build. The source-consistency test verifies archive member bytes against the checkout. The release client/source installers remain on GitHub. This service's source download is independent and always available without GitHub. Regenerating the archive does not modify the frozen application or legacy downloads site.

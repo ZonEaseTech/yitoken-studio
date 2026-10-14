@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -254,7 +255,7 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/", nil))
 	page := w.Body.String()
-	if strings.Count(page, `<article class="card">`) != 4 || strings.Contains(page, "同版本完整客户端源码") {
+	if len(regexp.MustCompile(`<article\b[^>]*>`).FindAllString(page, -1)) != 4 || strings.Contains(page, "同版本完整客户端源码") {
 		t.Error("download grid must contain only the four platform installer cards")
 	}
 	for _, name := range []string{
@@ -262,7 +263,7 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 		"yitoken-studio-0.1.0-alpha.1-arm64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-arm64-mac.zip",
 		"yitoken-studio-0.1.0-alpha.1-x64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-x64-mac.zip",
 	} {
-		if !strings.Contains(page, `class="button" href="/downloads/assets/`+name+`"`) {
+		if len(regexp.MustCompile(`<a\b[^>]*href="/downloads/assets/`+regexp.QuoteMeta(name)+`"[^>]*>`).FindAllString(page, -1)) != 1 {
 			t.Errorf("missing installer download %s", name)
 		}
 	}
@@ -280,6 +281,72 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 		t.Error("page requires remote or unrendered content")
 	}
 }
+func TestDownloadPortalGuidance(t *testing.T) {
+	w := httptest.NewRecorder()
+	newRelay(productionClient(), nil).ServeHTTP(w, httptest.NewRequest("GET", "/downloads/", nil))
+	page := w.Body.String()
+	for _, want := range []string{`href="#platforms"`, `id="platforms"`, `id="usage-guide"`, "选择系统下载", "三步开始创作", "下载安装", "填写本人 Key", "创作并合成整片", "0.1.0-alpha.1", "预发布", "非稳定版"} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing download guidance %s", want)
+		}
+	}
+	if strings.Contains(page, "install-risk") || strings.Contains(page, "安装之前请知道") || strings.Contains(page, `class="notice"`) {
+		t.Error("the removed installation warning banner must not return")
+	}
+	for _, unwanted := range []string{"待批准", "PROPOSED LAYOUT", "方案注释", "studio-mock", "设计选择", "data-original-href", "<script", "<form", "未签名程序可能出现系统信誉提示", "不要关闭系统防护或绕过安全校验", "请先备份现有项目和素材"} {
+		if strings.Contains(page, unwanted) {
+			t.Errorf("public download page contains proposal or active content %s", unwanted)
+		}
+	}
+	steps := regexp.MustCompile(`(?s)<ol\b[^>]*>.*?</ol>`).FindString(page)
+	if len(regexp.MustCompile(`<li\b[^>]*>`).FindAllString(steps, -1)) != 3 {
+		t.Error("usage guide must expose exactly three ordered steps")
+	}
+	installerLinks := regexp.MustCompile(`<a\b[^>]*href="/downloads/assets/[^"/]+\.(?:exe|AppImage|dmg|zip)"[^>]*>`)
+	if len(installerLinks.FindAllString(page, -1)) != 6 {
+		t.Error("download page must offer exactly the six existing installer links")
+	}
+	cardInstallers := 0
+	for _, card := range regexp.MustCompile(`(?s)<article\b[^>]*>.*?</article>`).FindAllString(page, -1) {
+		cardInstallers += len(installerLinks.FindAllString(card, -1))
+	}
+	if cardInstallers != 6 {
+		t.Error("all six installer links must remain inside the four system cards")
+	}
+	// Safety and acceptance limits stay readable on demand, not as a first-screen banner.
+	folded := regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`).FindAllString(page, -1)
+	for _, fact := range []string{
+		"本版为 alpha 预发布", "签名：未签名", "macOS 公证：未公证",
+		"模型列表 / 模拟协议测试不代表真实生成成功", "Windows 原生安装与系统加密、付费生成尚未完成验收",
+		"19 个测试文件 / 160 项测试通过", "Mac 原生安装已验证", "不代表所有系统兼容性或付费生成已经验证",
+		"720p / 1080p", "16:9 / 9:16", "30fps", "H.264 / AAC", "无音轨补静音", "不同比例留黑边、不拉伸",
+		"字幕", "BGM", "转场", "裁剪", "多轨编辑", "在线项目分享", "200", "10 分钟", "2 小时", "512MiB", "2GiB",
+		"取消不删原素材，不覆盖已有输出", "新的本地保存位置", "等待实际验证成功", "所选 AI 服务商",
+		"公开图床默认关闭", "开启前须明确同意", "勿上传未授权或机密内容", "Key 仅会话有效", "不回退明文持久化",
+		"网络提交结果未知时不自动重复提交", "先核对后台任务", "本站不缓存安装包", "完整下载后自行核验",
+		"上游不可达、链接校验失败或并发已满", "原 SHA256SUMS.txt", "原作者与版权声明保留", "AGPL-3.0-or-later",
+		"FFmpeg / x264", "GPL", "精确对应源码", "第三方许可证继续适用", "品牌改编不代表上游作者背书", "未进行法律或专利许可认证",
+	} {
+		if !strings.Contains(strings.Join(folded, "\n"), fact) {
+			t.Errorf("missing folded safety or release fact %s", fact)
+		}
+	}
+	for _, metadata := range []string{
+		"168,144,976 bytes", "160.4 MiB", "576655a32159c9b1f96c62a1ca4d132bd94504deda63205356ef4f05a789266f",
+		"200,384,647 bytes", "191.1 MiB", "bdd36a58f7cb2c50a37422b176771f68f1088abf572e2ed9f1116f162d2cfcf0",
+		"196,821,677 bytes", "187.7 MiB", "17c7da96c40c620411df1e76457f547c5e808ace52986ad1bd869f3fa57d02aa",
+		"196,997,949 bytes", "187.9 MiB", "c5534528b8d7eb59909a97996b36267147b689828f3049bb2484e789e8f30d51",
+		"202,422,977 bytes", "193.0 MiB", "7b3ca84c609053df1d5d2baa45f1b0a3f9f4b10185ea7656c930cedf62fdce1c",
+		"202,608,058 bytes", "193.2 MiB", "cc221d8e6f6ad7fae19c95012cd310f4d0be20575485f8bd75245fbe8807d04c",
+		"默认 API 为 YITOKEN", "客户端不附赠运营方 Key", "本机拼接已有视频不新增 AI 生成费用",
+		`content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"`,
+	} {
+		if !strings.Contains(page, metadata) {
+			t.Errorf("missing unchanged download metadata or policy %s", metadata)
+		}
+	}
+}
+
 func TestCorrespondingSourceArchiveMatchesCheckout(t *testing.T) {
 	z, err := gzip.NewReader(bytes.NewReader(sourceArchive))
 	if err != nil {

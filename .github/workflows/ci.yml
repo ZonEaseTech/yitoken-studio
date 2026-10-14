@@ -30,6 +30,7 @@ jobs:
           node-version: 24.21.0
       - run: google-chrome --version
       - run: node --check site-entry.mjs
+      - run: node --check ../studio-guide/studio-guide.mjs
       - run: node --test site-entry.test.mjs
       - run: python3 -m unittest -v patch_shells_test.py
 
