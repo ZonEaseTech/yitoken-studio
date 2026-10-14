@@ -124,6 +124,10 @@ jobs:
 
   desktop:
     needs: validate
+    defaults:
+      run:
+        # GnuPG agent sockets must fit macOS's 104-byte Unix socket path limit.
+        working-directory: /tmp/yitoken-desktop
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +157,13 @@ jobs:
         with:
           ref: ${{ needs.validate.outputs.source_ref }}
           persist-credentials: false
+      - name: Copy clean frozen checkout to a short private build directory
+        working-directory: .
+        run: |
+          # Fail on an existing path; never reuse or overwrite another checkout.
+          mkdir -m 0700 /tmp/yitoken-desktop
+          cp -a "$GITHUB_WORKSPACE/." /tmp/yitoken-desktop/
+          chmod 0700 /tmp/yitoken-desktop
       - name: Verify application checkout
         env:
           SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
@@ -198,13 +209,15 @@ jobs:
         run: |
           xvfb-run -a wineboot --init
           wineserver -w
-          xvfb-run -a npm run build:win -- --x64
+          # The frozen builder infers publication from CI/tag context. Disable
+          # inference only in this child; the final publish job owns all uploads.
+          env -u GITHUB_REF_TYPE CI=false xvfb-run -a npm run build:win -- --x64
       - name: Package Linux or macOS with the verified resource wrapper
         if: matrix.platform != 'win'
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-        run: node scripts/build-desktop.mjs "--$PLATFORM" "--$ARCH"
+        run: env -u GITHUB_REF_TYPE CI=false node scripts/build-desktop.mjs "--$PLATFORM" "--$ARCH"
       - name: Collect only verified final installers and source manifest
         env:
           PLATFORM: ${{ matrix.platform }}

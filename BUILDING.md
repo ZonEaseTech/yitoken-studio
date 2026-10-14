@@ -46,6 +46,12 @@ Actions / Unsigned desktop prerelease / Run workflow（选择 main）
 
 **说明：新增工作流不代表四个平台已经构建通过。** 请以具体 GitHub Actions 运行的最终状态、日志和可下载资产为准；进行中、超时、部分平台成功都不算完整交付。应用测试数量以当前 tag 的实际测试日志为准，冻结版本基线为 160 项测试。
 
+### 首轮流水线故障与修复范围
+
+- macOS 首轮在导入 FFmpeg 公钥时失败：默认工作区太长，隔离 GnuPG home 下的 agent 额外 Unix socket 路径达到或超过 macOS 的 104 字节容量。桌面矩阵现在将刚检出的冻结源码物理复制到独占的 `/tmp/yitoken-desktop` 后构建（macOS 实际为 `/private/tmp/yitoken-desktop`）；目标存在即失败，不复用、不覆盖。应用提交身份检查、媒体源码 SHA256、GPG 签名及签名指纹检查全部保留。
+- Windows/Linux 首轮已生成安装文件，但锁定的 electron-builder 根据 CI 环境隐式尝试自行发布，因没有 `GH_TOKEN` 失败。只在打包子进程使用 `env -u GITHUB_REF_TYPE CI=false`，同时关闭 CI 和 tag 两种隐式发布推断；测试步骤仍在真实 CI 环境下执行，之后的来源清单和最终发布步骤仍使用真实 GitHub 上下文。没有给桌面构建添加 token、写权限，也没有修改冻结打包脚本。
+- 本次只修改流水线及本说明，冻结应用 tag、398 个应用源码文件、完整对应源码包及其 SHA256 不变。是否已解决仍须以修复后的四平台真实流水线终态为准。
+
 ## 本机 macOS 构建
 
 需要匹配本机架构的 Node.js **24.21.0**、npm、Xcode Command Line Tools，以及 Homebrew 的 `gnupg`、`pkg-config`、`gnu-tar`、`nasm`、`yasm`。先安装缺少的前置工具，不使用未锁定的 `npx` 临时下载打包器。
