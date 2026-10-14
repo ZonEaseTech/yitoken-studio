@@ -5,11 +5,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -285,13 +289,13 @@ func TestDownloadPortalGuidance(t *testing.T) {
 	w := httptest.NewRecorder()
 	newRelay(productionClient(), nil).ServeHTTP(w, httptest.NewRequest("GET", "/downloads/", nil))
 	page := w.Body.String()
-	for _, want := range []string{`href="#platforms"`, `id="platforms"`, `id="usage-guide"`, "选择系统下载", "三步开始创作", "下载安装", "填写本人 Key", "创作并合成整片", "0.1.0-alpha.1", "预发布", "非稳定版"} {
+	for _, want := range []string{`href="#platforms"`, `id="platforms"`, `id="usage-guide"`, "选择系统下载", "三步开始创作", "下载安装", "填写本人 Key", "创作并合成整片", "0.1.0-alpha.1", "AI 视频创作软件", "这是一款装在电脑上的 AI 视频创作软件", "编写剧本和分镜", "生成图片与视频片段", "在本地合成为完整 MP4", "自备 YITOKEN API Key", "主动生成按本人账户额度计费"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing download guidance %s", want)
 		}
 	}
-	if strings.Contains(page, "install-risk") || strings.Contains(page, "安装之前请知道") || strings.Contains(page, `class="notice"`) {
-		t.Error("the removed installation warning banner must not return")
+	if strings.Contains(page, "beta-pill") || strings.Contains(page, "预发布 · 非稳定版") || strings.Contains(page, "install-risk") || strings.Contains(page, "安装之前请知道") || strings.Contains(page, `class="notice"`) {
+		t.Error("removed installation and prerelease warning badges must not return")
 	}
 	for _, unwanted := range []string{"待批准", "PROPOSED LAYOUT", "方案注释", "studio-mock", "设计选择", "data-original-href", "<script", "<form", "未签名程序可能出现系统信誉提示", "不要关闭系统防护或绕过安全校验", "请先备份现有项目和素材"} {
 		if strings.Contains(page, unwanted) {
@@ -323,7 +327,7 @@ func TestDownloadPortalGuidance(t *testing.T) {
 		"字幕", "BGM", "转场", "裁剪", "多轨编辑", "在线项目分享", "200", "10 分钟", "2 小时", "512MiB", "2GiB",
 		"取消不删原素材，不覆盖已有输出", "新的本地保存位置", "等待实际验证成功", "所选 AI 服务商",
 		"公开图床默认关闭", "开启前须明确同意", "勿上传未授权或机密内容", "Key 仅会话有效", "不回退明文持久化",
-		"网络提交结果未知时不自动重复提交", "先核对后台任务", "本站不缓存安装包", "完整下载后自行核验",
+		"网络提交结果未知时不自动重复提交", "先核对后台任务", "已校验安装包从本站服务器直接下载", "未镜像对应源码或其他资产仍由本站转发 GitHub", "完整下载后自行核验",
 		"上游不可达、链接校验失败或并发已满", "原 SHA256SUMS.txt", "原作者与版权声明保留", "AGPL-3.0-or-later",
 		"FFmpeg / x264", "GPL", "精确对应源码", "第三方许可证继续适用", "品牌改编不代表上游作者背书", "未进行法律或专利许可认证",
 	} {
@@ -497,5 +501,252 @@ func TestProductionClientDoesNotUseEnvironmentProxy(t *testing.T) {
 	}
 	if transport.TLSClientConfig != nil && transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatal("TLS verification disabled")
+	}
+}
+
+type mirrorConfig interface {
+	loadMirror(string) error
+	closeMirror() error
+}
+
+func mirrorFixture(t *testing.T) (*relay, string, mirrorConfig) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "sample.zip"), []byte("abcdef"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte("abcdef")))
+	h := newRelay(&http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		t.Error("verified mirror must not call upstream")
+		return nil, errors.New("unexpected upstream")
+	})}, map[string]asset{"sample.zip": {Name: "sample.zip", Size: 6, SHA256: digest}})
+	config, ok := any(h).(mirrorConfig)
+	if !ok {
+		t.Fatal("relay does not support a verified read-only mirror")
+	}
+	if err := config.loadMirror(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = config.closeMirror() })
+	return h, dir, config
+}
+
+func TestVerifiedMirrorDownloadsAndValidation(t *testing.T) {
+	h, _, _ := mirrorFixture(t)
+	etag := `"sha256-` + fmt.Sprintf("%x", sha256.Sum256([]byte("abcdef"))) + `"`
+	for _, tc := range []struct {
+		method, path, interval, validator string
+		status                            int
+		body, length, contentRange        string
+	}{
+		{"GET", "/downloads/assets/sample.zip", "", "", 200, "abcdef", "6", ""},
+		{"HEAD", "/downloads/assets/sample.zip", "", "", 200, "", "6", ""},
+		{"GET", "/downloads/assets/sample.zip", "bytes=1-3", "", 206, "bcd", "3", "bytes 1-3/6"},
+		{"HEAD", "/downloads/assets/sample.zip", "bytes=1-3", etag, 206, "", "3", "bytes 1-3/6"},
+		{"GET", "/downloads/assets/sample.zip", "bytes=-2", etag, 206, "ef", "2", "bytes 4-5/6"},
+		{"GET", "/downloads/assets/sample.zip", "bytes=3-", "", 206, "def", "3", "bytes 3-5/6"},
+		{"GET", "/downloads/assets/sample.zip", "bytes=1-3", `"old"`, 200, "abcdef", "6", ""},
+		{"GET", "/downloads/assets/sample.zip", "bytes=1-3", "W/" + etag, 200, "abcdef", "6", ""},
+		{"GET", "/downloads/assets/sample.zip", "bytes=1-3", "Wed, 14 Oct 2026 00:00:00 GMT", 200, "abcdef", "6", ""},
+		{"GET", "/downloads/assets/sample.zip", "bytes=6-", "", 416, "", "", "bytes */6"},
+		{"GET", "/downloads/assets/sample.zip", "bytes=0-1,3-4", "", 416, "", "", "bytes */6"},
+		{"POST", "/downloads/assets/sample.zip", "", "", 405, "", "", ""},
+		{"GET", "/downloads/assets/sample.zip?url=x", "", "", 400, "", "", ""},
+		{"GET", "/downloads/assets/%73ample.zip", "", "", 400, "", "", ""},
+		{"GET", "/downloads/assets/../sample.zip", "", "", 404, "", "", ""},
+		{"GET", "/downloads/assets/unknown.zip", "", "", 404, "", "", ""},
+	} {
+		t.Run(tc.method+tc.path+tc.interval+tc.validator, func(t *testing.T) {
+			r := httptest.NewRequest(tc.method, tc.path, nil)
+			r.Header.Set("Range", tc.interval)
+			r.Header.Set("If-Range", tc.validator)
+			r.Header.Set("Authorization", "Bearer private")
+			r.Header.Set("Cookie", "private=1")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tc.status || w.Header().Get("Content-Range") != tc.contentRange {
+				t.Fatalf("status/range: %d %v", w.Code, w.Header())
+			}
+			if tc.status < 300 && (w.Body.String() != tc.body || w.Header().Get("Content-Length") != tc.length || w.Header().Get("ETag") != etag || w.Header().Get("Content-Type") != "application/octet-stream" || w.Header().Get("Content-Encoding") != "identity" || w.Header().Get("Content-Disposition") != "attachment; filename=sample.zip") {
+				t.Errorf("incorrect local bytes or headers: %q %v", w.Body.String(), w.Header())
+			}
+			if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Cache-Control") != "no-store, no-transform" || w.Header().Get("Location") != "" || w.Header().Get("Set-Cookie") != "" || strings.Contains(w.Body.String(), "private") {
+				t.Error("local response weakened security headers")
+			}
+		})
+	}
+	for range cap(h.slots) {
+		h.slots <- struct{}{}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/sample.zip", nil))
+	if w.Code != 503 || w.Header().Get("Retry-After") == "" {
+		t.Error("local mirror bypassed shared concurrency limit")
+	}
+	for range cap(h.slots) {
+		<-h.slots
+	}
+}
+
+func TestMirrorStartupIntegrityAndFallback(t *testing.T) {
+	for _, mode := range []string{"missing-root", "empty", "wrong-size", "wrong-hash", "directory-file", "symlink-file", "symlink-root", "outside-name"} {
+		t.Run(mode, func(t *testing.T) {
+			h, _, config := mirrorFixture(t)
+			_ = config.closeMirror()
+			dir := t.TempDir()
+			file := filepath.Join(dir, "sample.zip")
+			if mode != "empty" && mode != "missing-root" {
+				if err := os.WriteFile(file, []byte("abcdef"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch mode {
+			case "missing-root":
+				dir = filepath.Join(dir, "missing")
+			case "wrong-size":
+				if err := os.WriteFile(file, []byte("abc"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-hash":
+				if err := os.WriteFile(file, []byte("ABCDEF"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory-file":
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(file, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink-file":
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(t.TempDir(), "outside.zip"), file); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink-root":
+				link := filepath.Join(t.TempDir(), "root-link")
+				if err := os.Symlink(dir, link); err != nil {
+					t.Fatal(err)
+				}
+				dir = link
+			case "outside-name":
+				h.assets["../outside.zip"] = asset{Name: "../outside.zip", Size: 6}
+			}
+			if config.loadMirror(dir) == nil {
+				t.Fatal("invalid mirror accepted: " + mode)
+			}
+		})
+	}
+	h, dir, config := mirrorFixture(t)
+	_ = config.closeMirror()
+	if err := os.WriteFile(filepath.Join(dir, "unlisted.zip"), []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.assets["missing.zip"] = asset{Name: "missing.zip", Size: 6, SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("abcdef")))}
+	if err := config.loadMirror(dir); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	h.client = &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		if r.URL.Path != upstreamPrefix+"missing.zip" {
+			t.Error("fallback selected wrong path")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, ContentLength: 6, Body: io.NopCloser(strings.NewReader("abcdef"))}, nil
+	})}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/missing.zip", nil))
+	if w.Code != 200 || w.Body.String() != "abcdef" || calls.Load() != 1 {
+		t.Error("unmirrored asset did not use fixed upstream fallback")
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/unlisted.zip", nil))
+	if w.Code != 404 || calls.Load() != 1 {
+		t.Error("mirror exposed unlisted file")
+	}
+}
+
+func TestMirrorChangedFileFailsClosed(t *testing.T) {
+	for _, mode := range []string{"remove", "truncate", "replace", "symlink", "same-size-modification"} {
+		t.Run(mode, func(t *testing.T) {
+			h, dir, _ := mirrorFixture(t)
+			file := filepath.Join(dir, "sample.zip")
+			switch mode {
+			case "remove":
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+			case "truncate":
+				if err := os.Truncate(file, 3); err != nil {
+					t.Fatal(err)
+				}
+			case "replace":
+				replacement := filepath.Join(dir, "replacement")
+				if err := os.WriteFile(replacement, []byte("abcdef"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, file); err != nil {
+					t.Fatal(err)
+				}
+			case "same-size-modification":
+				if err := os.WriteFile(file, []byte("ABCDEF"), 0600); err != nil {
+					t.Fatal(err)
+				}
+				changed := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+				if err := os.Chtimes(file, changed, changed); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Remove(file); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join(t.TempDir(), "outside"), file); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/sample.zip", nil))
+			if w.Code != 503 || w.Header().Get("Retry-After") == "" || w.Body.String() == "abcdef" {
+				t.Error("changed verified file must fail closed, not upstream fallback")
+			}
+		})
+	}
+}
+
+type mirrorInterruptWriter struct {
+	*httptest.ResponseRecorder
+	interrupt func()
+}
+
+func (w mirrorInterruptWriter) WriteHeader(status int) {
+	w.ResponseRecorder.WriteHeader(status)
+	w.interrupt()
+}
+
+func TestMirrorInterruptedStreamAborts(t *testing.T) {
+	for _, mode := range []string{"truncate-after-headers", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			h, dir, _ := mirrorFixture(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			w := mirrorInterruptWriter{ResponseRecorder: httptest.NewRecorder(), interrupt: func() {
+				if mode == "cancel" {
+					cancel()
+				} else if err := os.Truncate(filepath.Join(dir, "sample.zip"), 3); err != nil {
+					t.Fatal(err)
+				}
+			}}
+			defer func() {
+				if recover() != http.ErrAbortHandler {
+					t.Error("interrupted mirror returned successful EOF")
+				}
+				if len(h.slots) != 0 {
+					t.Error("mirror leaked transfer slot")
+				}
+			}()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/sample.zip", nil).WithContext(ctx))
+		})
 	}
 }

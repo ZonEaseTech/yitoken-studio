@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -42,9 +44,11 @@ type asset struct {
 	SHA256 string `json:"sha256"`
 }
 type relay struct {
-	client *http.Client
-	assets map[string]asset
-	slots  chan struct{}
+	client      *http.Client
+	assets      map[string]asset
+	slots       chan struct{}
+	mirrorRoot  *os.Root
+	mirrorFiles map[string]os.FileInfo
 }
 
 func newRelay(client *http.Client, assets map[string]asset) *relay {
@@ -78,6 +82,117 @@ func newRelay(client *http.Client, assets map[string]asset) *relay {
 		}
 	}
 	return &relay{client: client, assets: assets, slots: make(chan struct{}, 8)}
+}
+
+// loadMirror hashes only allowlisted files; no directory listing or download is performed.
+// The operator must mount the verified directory read-only for the process lifetime.
+func (h *relay) loadMirror(dir string) error {
+	if h.mirrorRoot != nil {
+		return errors.New("mirror already configured")
+	}
+	directory, err := os.Lstat(dir)
+	if err != nil || !directory.IsDir() || directory.Mode()&os.ModeSymlink != 0 {
+		return errors.New("invalid mirror directory")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return errors.New("mirror directory unavailable")
+	}
+	verified := make(map[string]os.FileInfo)
+	defer func() {
+		if h.mirrorRoot != root {
+			_ = root.Close()
+		}
+	}()
+	for name, a := range h.assets {
+		if !validFilename(name) || a.Name != name {
+			return errors.New("invalid mirror asset name")
+		}
+		info, err := root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue // A genuinely absent asset keeps the existing fixed GitHub route.
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Size() != a.Size {
+			return fmt.Errorf("invalid mirror asset: %s", name)
+		}
+		file, err := root.Open(name)
+		if err != nil {
+			return fmt.Errorf("mirror asset unavailable: %s", name)
+		}
+		opened, statErr := file.Stat()
+		if statErr != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() || opened.Size() != a.Size {
+			_ = file.Close()
+			return fmt.Errorf("mirror asset changed: %s", name)
+		}
+		hash := sha256.New()
+		copied, hashErr := io.Copy(hash, file)
+		after, afterErr := file.Stat()
+		closeErr := file.Close()
+		if hashErr != nil || afterErr != nil || closeErr != nil || copied != a.Size || after.Size() != a.Size || !opened.ModTime().Equal(after.ModTime()) || fmt.Sprintf("%x", hash.Sum(nil)) != a.SHA256 {
+			return fmt.Errorf("mirror integrity check failed: %s", name)
+		}
+		verified[name] = after
+	}
+	if len(verified) == 0 {
+		return errors.New("mirror contains no verified assets")
+	}
+	h.mirrorFiles, h.mirrorRoot = verified, root
+	return nil
+}
+
+func (h *relay) closeMirror() error {
+	if h.mirrorRoot == nil {
+		return nil
+	}
+	err := h.mirrorRoot.Close()
+	h.mirrorRoot, h.mirrorFiles = nil, nil
+	return err
+}
+
+type mirrorBody struct {
+	ctx context.Context
+	*io.SectionReader
+	file *os.File
+}
+
+func (b *mirrorBody) Read(p []byte) (int, error) {
+	if err := b.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return b.SectionReader.Read(p)
+}
+
+func (b *mirrorBody) Close() error { return b.file.Close() }
+
+func (h *relay) openMirror(ctx context.Context, r *http.Request, a asset, start, end int64) (*http.Response, error) {
+	verified := h.mirrorFiles[a.Name]
+	info, err := h.mirrorRoot.Lstat(a.Name)
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(verified, info) || info.Size() != a.Size || !verified.ModTime().Equal(info.ModTime()) {
+		return nil, errors.New("mirror changed")
+	}
+	file, err := h.mirrorRoot.Open(a.Name)
+	if err != nil {
+		return nil, errors.New("mirror unavailable")
+	}
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(verified, opened) || opened.Size() != a.Size || !verified.ModTime().Equal(opened.ModTime()) {
+		_ = file.Close()
+		return nil, errors.New("mirror changed")
+	}
+	etag := `"sha256-` + a.SHA256 + `"`
+	header := http.Header{"Etag": {etag}}
+	status := http.StatusOK
+	if r.Header.Get("Range") != "" && (r.Header.Get("If-Range") == "" || r.Header.Get("If-Range") == etag) {
+		status = http.StatusPartialContent
+		header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, a.Size))
+	} else {
+		start, end = 0, a.Size-1
+	}
+	length := end - start + 1
+	return &http.Response{
+		StatusCode: status, Header: header, ContentLength: length,
+		Body: &mirrorBody{ctx: ctx, SectionReader: io.NewSectionReader(file, start, length), file: file},
+	}, nil
 }
 
 func validFilename(name string) bool {
@@ -156,23 +271,33 @@ func (h *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), transferTimeout)
 	defer cancel()
-	upstream, err := http.NewRequestWithContext(ctx, r.Method, "https://github.com"+upstreamPrefix+name, nil)
-	if err != nil {
-		writeError(w, r, 502, "download unavailable")
-		return
-	}
-	upstream.Header.Set("User-Agent", "YITOKEN-Studio-Download-Relay/1")
-	upstream.Header.Set("Accept-Encoding", "identity")
-	if r.Header.Get("Range") != "" {
-		upstream.Header.Set("Range", r.Header.Get("Range"))
-		if value := r.Header.Get("If-Range"); value != "" {
-			upstream.Header.Set("If-Range", value)
+	var response *http.Response
+	if _, mirrored := h.mirrorFiles[name]; mirrored {
+		response, err = h.openMirror(ctx, r, a, start, end)
+		if err != nil {
+			w.Header().Set("Retry-After", "5")
+			writeError(w, r, 503, "download mirror unavailable")
+			return
 		}
-	}
-	response, err := h.client.Do(upstream)
-	if err != nil {
-		writeError(w, r, 502, "download unavailable")
-		return
+	} else {
+		upstream, err := http.NewRequestWithContext(ctx, r.Method, "https://github.com"+upstreamPrefix+name, nil)
+		if err != nil {
+			writeError(w, r, 502, "download unavailable")
+			return
+		}
+		upstream.Header.Set("User-Agent", "YITOKEN-Studio-Download-Relay/1")
+		upstream.Header.Set("Accept-Encoding", "identity")
+		if r.Header.Get("Range") != "" {
+			upstream.Header.Set("Range", r.Header.Get("Range"))
+			if value := r.Header.Get("If-Range"); value != "" {
+				upstream.Header.Set("If-Range", value)
+			}
+		}
+		response, err = h.client.Do(upstream)
+		if err != nil {
+			writeError(w, r, 502, "download unavailable")
+			return
+		}
 	}
 	defer response.Body.Close()
 	expected := a.Size
@@ -337,8 +462,15 @@ func productionClient() *http.Client {
 }
 
 func main() {
+	handler := newRelay(productionClient(), nil)
+	if dir, configured := os.LookupEnv("YITOKEN_DOWNLOAD_MIRROR_DIR"); configured {
+		if err := handler.loadMirror(dir); err != nil {
+			log.Fatal("download mirror validation failed")
+		}
+		defer handler.closeMirror()
+	}
 	server := &http.Server{
-		Addr: ":8080", Handler: newRelay(productionClient(), nil),
+		Addr: ":8080", Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second,
 		WriteTimeout: transferTimeout + time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 * 1024,
 	}
