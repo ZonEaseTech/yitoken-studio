@@ -25,6 +25,8 @@ python3 -m unittest -v patch_shells_test.py
 
 需要 Node >=22、Python3、google-chrome（可用 CHROME_BIN 指定）。浏览器测试用独立临时 profile 和本地 HTTP fixture，测试后停止自己的 Chrome并清理该profile；不读用户真实浏览器、账户、Key或认证缓存。
 
+Chrome 启动就绪最多等待30秒：检查独立 profile 的 `DevToolsActivePort`、本地 DevTools page target 和 WebSocket；spawn 失败或进程提前退出及时失败，输出退出码/信号、最近就绪错误和有界的8KiB stderr。仅启动边界放宽，原业务 DOM 等待、CDP/点击超时和19项业务断言不改，不重试整个测试。曾有 CI 在共享启动 hook 报“Isolated Chrome must start”，当时忽略 stderr 且只等约5秒；旧日志不足以证明唯一根因是慢启动，新诊断用于区分迟就绪、缺少可执行文件、提前退出等环境失败。模拟6秒延迟启动与提前退出只验证此启动契约，不代表已复现 CI 的实际根因。
+
 ## 隔离与生命周期
 
 不读取 localStorage/cookie/用户信息，不新增 API 请求、遥测或第三方资源。只读取文档语言和必要的导航/定制首页结构。DOM变化通过 MutationObserver 合并到一帧，更新幂等；移除的Shadow宿主观察器及时释放。异步Shadow装载探测最多2秒，停止时移除本模块节点/样式与观察器，不修改原内容。

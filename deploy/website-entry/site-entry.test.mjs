@@ -66,16 +66,36 @@ before(async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
   profile = await mkdtemp(join(tmpdir(), 'yitoken-entry-test-'));
-  browser = spawn(process.env.CHROME_BIN || 'google-chrome', ['--headless', '--disable-gpu', '--no-sandbox', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
-  let port;
-  for (let attempt = 0; attempt < 200; attempt++) {
-    try { port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; break; }
-    catch { await new Promise(resolve => setTimeout(resolve, 25)); }
+  const chrome = process.env.CHROME_BIN || 'google-chrome';
+  const startupDeadline = Date.now() + 30000;
+  let stderrTail = Buffer.alloc(0), launchError, lastStartupError, target;
+  browser = spawn(chrome, ['--headless', '--disable-gpu', '--no-sandbox', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  browser.stderr.on('data', chunk => { stderrTail = Buffer.concat([stderrTail, chunk]).subarray(-8192); });
+  browser.once('error', error => { launchError = error; });
+  function browserStartupError(reason) {
+    return Error(`${reason}; executable=${chrome}; exitCode=${browser.exitCode}; signal=${browser.signalCode}; spawnError=${launchError?.message || 'none'}; lastReadinessError=${lastStartupError?.message || 'none'}\nChrome stderr (last 8192 bytes):\n${stderrTail.toString('utf8') || '(empty)'}`);
   }
-  assert.ok(port, 'Isolated Chrome must start');
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  socket = new WebSocket(targets.find(target => target.type === 'page').webSocketDebuggerUrl);
-  await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
+  while (Date.now() < startupDeadline) {
+    if (launchError || browser.exitCode !== null || browser.signalCode !== null) throw browserStartupError('Isolated Chrome failed before readiness');
+    try {
+      const port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0];
+      if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) throw Error('DevToolsActivePort does not contain a valid port');
+      const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(Math.max(1, Math.min(1000, startupDeadline - Date.now()))) });
+      if (!response.ok) throw Error(`DevTools /json/list HTTP ${response.status}`);
+      target = (await response.json()).find(item => item.type === 'page' && item.webSocketDebuggerUrl);
+      if (!target) throw Error('DevTools does not yet expose a page target');
+    } catch (error) { lastStartupError = error; }
+    if (launchError || browser.exitCode !== null || browser.signalCode !== null) throw browserStartupError('Isolated Chrome failed before readiness');
+    if (target) break;
+    await new Promise(resolve => setTimeout(resolve, Math.max(1, Math.min(100, startupDeadline - Date.now()))));
+  }
+  if (!target) throw browserStartupError('Isolated Chrome did not become ready within 30000ms');
+  socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(browserStartupError('Chrome DevTools WebSocket did not open within startup deadline')), Math.max(1, startupDeadline - Date.now()));
+    socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+    socket.addEventListener('error', () => { clearTimeout(timeout); reject(browserStartupError('Chrome DevTools WebSocket failed to open')); }, { once: true });
+  });
   socket.addEventListener('message', event => {
     const m = JSON.parse(event.data);
     if (pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
@@ -92,7 +112,7 @@ before(async () => {
 });
 after(async () => {
   socket?.close();
-  if (browser && browser.exitCode === null) { const exit = new Promise(resolve => browser.once('exit', resolve)); browser.kill('SIGTERM'); await exit; }
+  if (browser?.pid && browser.exitCode === null && browser.signalCode === null) { const exit = new Promise(resolve => browser.once('exit', resolve)); browser.kill('SIGTERM'); await exit; }
   if (server) await new Promise(resolve => server.close(resolve));
   // CI observed ENOTEMPTY while Chrome finished writing its isolated Default profile.
   // Bound cleanup retries to this owned directory; persistent failures still fail the hook.
