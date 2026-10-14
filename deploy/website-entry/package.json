@@ -1,0 +1,1 @@
+{"name":"yitoken-site-download-entry","private":true,"type":"module","scripts":{"test":"node --test site-entry.test.mjs && python3 -m unittest patch_shells_test.py"}}
