@@ -1,0 +1,348 @@
+name: Unsigned desktop prerelease
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact application version tag (not a branch)
+        type: string
+        required: true
+        default: v0.1.0-alpha.1
+      publish:
+        description: Publish a new GitHub prerelease only after every build succeeds
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source_ref: ${{ steps.identity.outputs.source_ref }}
+      source_commit: ${{ steps.identity.outputs.source_commit }}
+      version: ${{ steps.identity.outputs.version }}
+      tag: ${{ steps.identity.outputs.tag }}
+      publish: ${{ steps.identity.outputs.publish }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: refs/tags/${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+      - name: Require exact version tag and freeze commit identity
+        id: identity
+        env:
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || github.ref_name }}
+          REQUEST_PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+          const tag = process.env.SOURCE_REF;
+          if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) || tag !== `v${version}`) {
+            throw new Error('source_ref must be the exact vVERSION tag from package.json; branches are not accepted');
+          }
+          const ref = `refs/tags/${tag}`;
+          execFileSync('git', ['show-ref', '--verify', ref]);
+          const commit = execFileSync('git', ['rev-parse', `${ref}^{commit}`], {encoding:'utf8'}).trim();
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
+          if (commit !== head) throw new Error('Checkout does not match the exact application tag');
+          if (tag === 'v0.1.0-alpha.1' && commit !== '8095244a6494575eeb6fb9dca09794341cd4cf0a') {
+            throw new Error('Frozen alpha tag changed; never replace this version');
+          }
+          const publish = process.env.REQUEST_PUBLISH;
+          if (!['true', 'false'].includes(publish)) throw new Error('Invalid publish flag');
+          appendFileSync(process.env.GITHUB_OUTPUT,
+            `source_ref=${ref}\nsource_commit=${commit}\nversion=${version}\ntag=${tag}\npublish=${publish}\n`);
+          NODE
+
+  source:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validate.outputs.source_ref }}
+          persist-credentials: false
+      - name: Verify frozen source checkout
+        env:
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+      - name: Generate complete corresponding source with GNU tar
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          tar --version | grep 'GNU tar'
+          if [ "$VERSION" = '0.1.0-alpha.1' ]; then
+            # This frozen archive used files 0664 and generated directories 0775.
+            # Normalize only this tag's tracked regular files, never .git or caches.
+            umask 0002
+            git ls-files -z > "$RUNNER_TEMP/frozen-source-files"
+            while IFS= read -r -d '' file; do
+              if [ ! -f "$file" ] || [ -L "$file" ]; then
+                echo "Frozen source is not a regular file: $file" >&2
+                exit 1
+              fi
+              chmod 0664 -- "$file"
+            done < "$RUNNER_TEMP/frozen-source-files"
+          fi
+          npm run release:source
+          cd release/source
+          sha256sum --check "yitoken-studio-${VERSION}-source.tar.gz.sha256"
+          if [ "$VERSION" = '0.1.0-alpha.1' ]; then
+            printf '%s  %s\n' '78b8a55536ab208c297605083aa8e08219fe7656648c0328f4be387092855e38' "yitoken-studio-${VERSION}-source.tar.gz" | sha256sum --check -
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-source
+          path: |
+            release/source/*.tar.gz
+            release/source/*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop:
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: win
+            arch: x64
+            media_target: win32-x64
+            runner: ubuntu-24.04
+          - platform: linux
+            arch: x64
+            media_target: linux-x64
+            runner: ubuntu-24.04
+          - platform: mac
+            arch: arm64
+            media_target: darwin-arm64
+            runner: macos-15
+          - platform: mac
+            arch: x64
+            media_target: darwin-x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.validate.outputs.source_ref }}
+          persist-credentials: false
+      - name: Verify application checkout
+        env:
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24.21.0
+      - name: Install Linux native build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config nasm yasm gnupg xz-utils
+      - name: Install MinGW and 32/64-bit Wine for Windows packaging
+        if: matrix.platform == 'win'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 wine wine64 wine32:i386 xvfb
+          echo "WINEPREFIX=${RUNNER_TEMP}/yitoken-wine64" >> "$GITHUB_ENV"
+          echo 'WINEARCH=win64' >> "$GITHUB_ENV"
+          echo 'USE_SYSTEM_WINE=true' >> "$GITHUB_ENV"
+      - name: Prepare matching macOS SDK and canonical temporary directory
+        if: runner.os == 'macOS'
+        run: |
+          for formula in gnupg pkg-config gnu-tar nasm yasm; do
+            if ! brew list --versions "$formula" >/dev/null 2>&1; then brew install "$formula"; fi
+          done
+          echo "$(brew --prefix gnu-tar)/libexec/gnubin" >> "$GITHUB_PATH"
+          mkdir -p "$RUNNER_TEMP/yitoken-tmp"
+          echo "TMPDIR=$(cd "$RUNNER_TEMP/yitoken-tmp" && pwd -P)/" >> "$GITHUB_ENV"
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+          echo "CC=$(xcrun --find clang)" >> "$GITHUB_ENV"
+      - run: npm ci
+      - name: Build native media for real media regression tests
+        run: npm run build:media
+      - run: npm run typecheck
+      - run: npm test
+      - name: Cross-build Windows media after native tests pass
+        if: matrix.platform == 'win'
+        run: npm run build:media:win
+      - name: Package Windows with an isolated 64-bit Wine prefix
+        if: matrix.platform == 'win'
+        run: |
+          xvfb-run -a wineboot --init
+          wineserver -w
+          xvfb-run -a npm run build:win -- --x64
+      - name: Package Linux or macOS with the verified resource wrapper
+        if: matrix.platform != 'win'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: node scripts/build-desktop.mjs "--$PLATFORM" "--$ARCH"
+      - name: Collect only verified final installers and source manifest
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          MEDIA_TARGET: ${{ matrix.media_target }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+          SOURCE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, mkdirSync, copyFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { createHash } from 'node:crypto';
+          const {PLATFORM: platform, ARCH: arch, VERSION: version, MEDIA_TARGET: target} = process.env;
+          const base = join('release', 'build', version);
+          const outputs = readdirSync(base, {withFileTypes:true}).filter(e => e.isDirectory() && e.name.startsWith(`${platform}-${arch}-`));
+          if (outputs.length !== 1) throw new Error('Expected one finalized verified desktop output; staging is never publishable');
+          const directory = join(base, outputs[0].name);
+          const expected = {win:['.exe'], linux:['.AppImage'], mac:['.dmg','.zip']}[platform];
+          const files = readdirSync(directory, {withFileTypes:true}).filter(e => e.isFile() && expected.some(ext => e.name.endsWith(ext)));
+          if (files.length !== expected.length || expected.some(ext => files.filter(f => f.name.endsWith(ext)).length !== 1)) {
+            throw new Error('Missing or duplicate platform installer');
+          }
+          const unpacked = join(directory, platform === 'mac' ? `mac${arch === 'x64' ? '' : `-${arch}`}` : `${platform}-unpacked`);
+          let resources = join(unpacked, 'resources');
+          if (platform === 'mac') {
+            const apps = readdirSync(unpacked, {withFileTypes:true}).filter(e => e.isDirectory() && e.name.endsWith('.app'));
+            if (apps.length !== 1) throw new Error('Expected one verified macOS application');
+            resources = join(unpacked, apps[0].name, 'Contents', 'Resources');
+          }
+          const resourceManifest = JSON.parse(readFileSync(join(resources, 'DESKTOP-RESOURCE-PROVENANCE.json'), 'utf8'));
+          if (resourceManifest.applicationVersion !== version || resourceManifest.mediaTarget !== target) throw new Error('Packaged resource identity mismatch');
+          const artifactDir = join(process.env.RUNNER_TEMP, `release-${platform}-${arch}`);
+          mkdirSync(artifactDir);
+          const assets = files.map(file => {
+            const data = readFileSync(join(directory, file.name));
+            copyFileSync(join(directory, file.name), join(artifactDir, file.name));
+            return {filename: file.name, sha256: createHash('sha256').update(data).digest('hex')};
+          });
+          writeFileSync(join(artifactDir, `BUILD-PROVENANCE-${platform}-${arch}.json`), JSON.stringify({
+            product: 'YITOKEN Studio', version, platform, arch, sourceTag: process.env.SOURCE_TAG,
+            sourceCommit: process.env.SOURCE_COMMIT, sourceArchive: `yitoken-studio-${version}-source.tar.gz`,
+            workflowRun: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            unsigned: true, notarized: false, assets, resources: resourceManifest
+          }, null, 2) + '\n');
+          NODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/release-${{ matrix.platform }}-${{ matrix.arch }}/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [validate, source, desktop]
+    if: needs.validate.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      SOURCE_TAG: ${{ needs.validate.outputs.tag }}
+      SOURCE_COMMIT: ${{ needs.validate.outputs.source_commit }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          path: assets
+          merge-multiple: false
+      - name: Verify every platform manifest and generate aggregate SHA256
+        run: |
+          python3 <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          root = Path('assets')
+          version, tag, commit = (os.environ[k] for k in ('VERSION', 'SOURCE_TAG', 'SOURCE_COMMIT'))
+          expected_dirs = {'release-source', 'release-win-x64', 'release-linux-x64', 'release-mac-arm64', 'release-mac-x64'}
+          if {p.name for p in root.iterdir()} != expected_dirs:
+              raise SystemExit('Missing or unexpected release artifact group')
+          source = root / 'release-source' / f'yitoken-studio-{version}-source.tar.gz'
+          digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+          source_hash = digest(source)
+          checksum = source.with_name(source.name + '.sha256')
+          if checksum.read_text() != f'{source_hash}  {source.name}\n':
+              raise SystemExit('Source checksum mismatch')
+          if version == '0.1.0-alpha.1' and source_hash != '78b8a55536ab208c297605083aa8e08219fe7656648c0328f4be387092855e38':
+              raise SystemExit('Frozen source checksum mismatch; do not overwrite existing version')
+          allowed_files = {source, checksum}
+          for platform, arch, suffixes in [('win','x64',['.exe']), ('linux','x64',['.AppImage']), ('mac','arm64',['.dmg','.zip']), ('mac','x64',['.dmg','.zip'])]:
+              directory = root / f'release-{platform}-{arch}'
+              manifest = directory / f'BUILD-PROVENANCE-{platform}-{arch}.json'
+              data = json.loads(manifest.read_text())
+              if (data['version'], data['sourceTag'], data['sourceCommit'], data['platform'], data['arch'], data['sourceArchive'], data['unsigned'], data['notarized']) != (version, tag, commit, platform, arch, source.name, True, False):
+                  raise SystemExit('Platform provenance identity mismatch')
+              entries = data['assets']
+              if len(entries) != len(suffixes) or any(sum(a['filename'].endswith(s) for a in entries) != 1 for s in suffixes):
+                  raise SystemExit('Incomplete platform installer set')
+              allowed_files.add(manifest)
+              for entry in entries:
+                  if Path(entry['filename']).name != entry['filename']:
+                      raise SystemExit('Unsafe asset filename')
+                  asset = directory / entry['filename']
+                  if digest(asset) != entry['sha256']:
+                      raise SystemExit('Installer checksum mismatch')
+                  allowed_files.add(asset)
+          files = {p for p in root.rglob('*') if p.is_file()}
+          if files != allowed_files or any(p.is_symlink() for p in root.rglob('*')):
+              raise SystemExit('Unexpected files or symlinks in release artifacts')
+          names = [p.name for p in files]
+          if len(set(names)) != len(names):
+              raise SystemExit('Duplicate public asset filename')
+          Path('publish-assets').mkdir()
+          import shutil
+          for path in sorted(files):
+              shutil.copyfile(path, Path('publish-assets') / path.name)
+          Path('publish-assets/SHA256SUMS.txt').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in sorted(files, key=lambda p: p.name)))
+          PY
+      - name: Create draft without replacing an existing release, then publish prerelease
+        run: |
+          test "$(gh api "repos/$GH_REPO/commits/$SOURCE_TAG" --jq '.sha')" = "$SOURCE_COMMIT"
+          # Fail closed on API errors. A pre-existing release (including a draft) is never reused.
+          gh api --paginate "repos/$GH_REPO/releases?per_page=100" --jq '.[].tag_name' > existing-tags.txt
+          if grep -Fxq "$SOURCE_TAG" existing-tags.txt; then
+            echo 'Release already exists; no release or asset will be overwritten.' >&2
+            exit 1
+          fi
+          cat > release-notes.md <<'NOTES'
+          Unsigned, unnotarized preview of YITOKEN Studio, based on Moyin Creator by MemeCalculate.
+
+          Includes Windows x64, Linux x64, macOS arm64/x64 installers, complete AGPL-3.0-or-later corresponding source (including locked FFmpeg/x264 source and third-party notices), per-platform provenance and SHA256SUMS.txt.
+
+          Download the correct architecture and verify the checksums. Security warnings are expected for unsigned preview packages; do not disable system protection. Windows native installation, paid API generation and older OS compatibility are not certified by these builds. No user API keys are included. See BUILDING.md on the repository main branch for build and installation guidance.
+          NOTES
+          gh release create "$SOURCE_TAG" --verify-tag --draft --prerelease --title "YITOKEN Studio $VERSION (unsigned preview)" --notes-file release-notes.md
+          # No --clobber: upload failures leave a draft for inspection, not a partial public release.
+          gh release upload "$SOURCE_TAG" publish-assets/*
+          test "$(gh api "repos/$GH_REPO/commits/$SOURCE_TAG" --jq '.sha')" = "$SOURCE_COMMIT"
+          gh release edit "$SOURCE_TAG" --draft=false --prerelease
