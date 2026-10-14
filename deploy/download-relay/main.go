@@ -20,7 +20,9 @@ import (
 )
 
 const upstreamPrefix = "/ZonEaseTech/yitoken-studio/releases/download/v0.1.0-alpha.1/"
-const transferTimeout = 30 * time.Minute
+
+// Large installers must remain resumable on slow international links; still bounded.
+const transferTimeout = 2 * time.Hour
 
 //go:embed index.html
 var indexPage []byte
