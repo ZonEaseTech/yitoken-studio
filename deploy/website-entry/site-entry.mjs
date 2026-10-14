@@ -30,6 +30,7 @@ const css = `
 function downloadLink(doc, text, className = '') {
   const link = doc.createElement('a');
   link.href = '/downloads/';
+  link.target = '_self';
   link.textContent = text;
   link.className = className;
   link.dataset.yitokenDownloadLink = '1';
@@ -97,7 +98,12 @@ export function startDownloadEntries(doc) {
     ensureStyle(doc.head);
     for (const header of app.querySelectorAll('header')) {
       const template = header.querySelector('nav a[href="/about"]') || header.querySelector('nav a[href="/pricing"]');
-      if (template) updateNav(template.parentElement, 'desktop', text.nav);
+      if (template) {
+        const container = template.parentElement;
+        const publicBar = container.parentElement;
+        const isPublic = container.tagName === 'DIV' && publicBar.tagName === 'NAV' && publicBar.closest('header') === header;
+        updateNav(container, isPublic ? 'desktop' : 'app', text.nav);
+      }
       const mobile = header.nextElementSibling?.querySelector('nav');
       if (mobile) updateNav(mobile, 'mobile', text.nav);
     }

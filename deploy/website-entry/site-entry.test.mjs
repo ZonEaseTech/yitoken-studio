@@ -119,6 +119,29 @@ for (const location of ['header', 'card', 'footer', 'mobile']) {
     assert.ok(requests.filter(r => r.path === '/downloads/').every(r => r.method === 'GET'));
   });
 }
+test('authenticated header preserves its original 48px layout and search controls', async () => {
+  await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+  const baseline = await evaluate(`(async()=>{YitokenSiteDownloadEntries.stop();const style=document.createElement('style');style.textContent='.console-header{height:48px}.console-inner{display:flex;height:100%;align-items:center;gap:8px;padding:0 12px}.console-brand{width:120px}.console-actions{display:flex;align-items:center;gap:8px;margin-left:auto}.console-top-nav{display:flex;align-items:center;gap:16px}.console-top-nav a{font-size:14px}.console-search{height:32px;width:160px}';document.head.append(style);document.querySelector('header').outerHTML='<header class="console-header"><div class="console-inner"><a class="console-brand" href="/">YITOKEN</a><div class="console-actions"><div class="console-nav-wrap"><nav class="console-top-nav">'+window.originalNav+'</nav></div><input class="console-search" aria-label="Search"><button>Notification</button><button>Profile</button></div></div></header>';const nav=document.querySelector('.console-top-nav').getBoundingClientRect(),search=document.querySelector('.console-search').getBoundingClientRect();return {wrapper:document.querySelector('.console-nav-wrap').getBoundingClientRect().height,navCenter:nav.y+nav.height/2,searchCenter:search.y+search.height/2}})()`);
+  await evaluate(`import('/site-entry.mjs').then(m=>m.startDownloadEntries(document))`);
+  await waitFor(`document.querySelector('.console-top-nav a[href="/downloads/"]')`);
+  const result = await evaluate(`(()=>{const nav=document.querySelector('.console-top-nav').getBoundingClientRect(),search=document.querySelector('.console-search').getBoundingClientRect();return {wrapper:document.querySelector('.console-nav-wrap').getBoundingClientRect().height,navCenter:nav.y+nav.height/2,searchCenter:search.y+search.height/2,publicBar:!!document.querySelector('.console-nav-wrap[data-yitoken-download-bar]'),wrap:getComputedStyle(document.querySelector('.console-top-nav')).flexWrap,profile:document.querySelector('.console-actions').lastElementChild.textContent}})()`);
+  assert.equal(result.wrapper, baseline.wrapper, 'AppHeader wrapper must not be raised to the PublicHeader 64px minimum');
+  assert.equal(result.navCenter, baseline.navCenter);
+  assert.equal(result.searchCenter, baseline.searchCenter);
+  assert.equal(result.publicBar, false); assert.equal(result.wrap, 'nowrap'); assert.equal(result.profile, 'Profile');
+});
+test('download anchors explicitly remain in this tab even with a default blank base target', async () => {
+  await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
+  await evaluate(`const base=document.createElement('base');base.target='_blank';document.head.append(base)`);
+  const targets = await evaluate(`[...document.querySelectorAll('a[data-yitoken-download-link]'),...document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('a[data-yitoken-download-link]')].map(a=>a.target)`);
+  assert.ok(targets.length > 0); assert.ok(targets.every(target=>target==='_self'), 'Explicit same-tab navigation is part of the download contract');
+  const before = (await send('Target.getTargets')).targetInfos.filter(target=>target.type==='page').length;
+  await evaluate(`document.querySelector('header a[href="/downloads/"]').click()`);
+  await waitFor(`location.pathname==='/downloads/' && document.title==='Downloads destination'`);
+  assert.equal((await send('Target.getTargets')).targetInfos.filter(target=>target.type==='page').length, before, 'Normal click must not open another tab');
+
+});
 test('cleanup removes only injected entries and leaves original content available for rollback', async () => {
   await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
   await evaluate(`globalThis.YitokenSiteDownloadEntries.stop()`);

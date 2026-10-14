@@ -9,7 +9,7 @@ AGPL-3.0-or-later。此目录是独立、无第三方依赖的官网渐进增强
 模块只在现有公开页面的 `#root` 存在时启动，复用：
 - PublicHeader 的现有导航链接样式，分别支持桌面和原手机全屏菜单；不复制认证事件，不删除已有菜单。
 - 已有 `.custom-home-content` open Shadow DOM、`.l[lang]` 七语言块，以及 `.ze` 的 card/btn/footer。保留原有网页创作台、API说明、版权、备案及开源来源。
-- 三处均为原生 `href="/downloads/"`：无需登录，同标签页发出 Document GET，不交给 SPA 路由。下载页维持四个平台卡片，不恢复源码大卡。
+- 三处均为原生 `href="/downloads/" target="_self"`：无需登录，同标签页发出 Document GET，不交给 SPA 路由。下载页维持四个平台卡片，不恢复源码大卡。
 
 这是既有线上定制内容没有可验证重建基线、且 HeaderNavModules 不支持新增链接时的兼容接点；不是新建替代 UI 组件或绕开现有确认/弹窗业务封装。
 
@@ -38,3 +38,7 @@ python3 -m unittest -v patch_shells_test.py
 3. 先validate/reload新增精确文件路由，再原子更新生成器并运行一次。原每30分钟SEO cron沿用同一个已更新生成器，避免入口被下轮重生成覆盖。不调用会改root access_token的旧i18n apply脚本，不写 options/users 表，不重启 API/支付/数据库/下载relay。
 4. 实际验收三个入口与手机菜单的原生文档导航，七语言/390/768/1280及收缩header无新增溢出；保留旧导航/首页内容/版权和下载页四卡。HEAD和小文件验证不代表整件安装包SHA或国内提速已认证。
 5. 回滚先核对当前Caddy/生成器仍是本次SHA，再恢复备份、重生成原SEO页并reload Caddy。不要覆盖后来用户改动，不动业务数据或容器；已打开页面刷新后恢复原外观。
+
+## 控制台布局回归
+
+AppHeader 的 TopNav 是独立 NAV，其父节点为 block 容器，与 PublicHeader 的桌面 DIV / 整条 NAV 不同。只给公共顶栏使用换行/最小高度样式；应用顶栏仅追加下载链接，保留原48px高度、搜索和个人操作对齐。正常下载点击显式使用同标签页；浏览器快捷键打开新标签仍遵守浏览器行为。实际生产bundle结构已只读核对；真实已登录会话界面与匿名公开首页不能混为一项验收。
