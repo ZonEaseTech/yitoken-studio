@@ -84,6 +84,14 @@ export interface ExportProgress {
   message: string;
 }
 
+/** Failed assets remain listed even when some other files were exported. */
+export class ExportPartialFailure extends Error {
+  constructor(public readonly failedFiles: string[]) {
+    super(`素材导出未完成，${failedFiles.length} 个文件失败：${failedFiles.join('、')}`);
+    this.name = 'ExportPartialFailure';
+  }
+}
+
 /**
  * Download a file from any URL type (HTTP, local-image://, data:) as Blob
  */
@@ -186,8 +194,8 @@ function buildManifest(config: ExportConfig): ExportManifest {
       depthOfField: shot.depthOfField,
       cameraRig: shot.cameraRig,
       playbackSpeed: shot.playbackSpeed,
-      imagePath: shot.imageUrl ? `images/shot_${shot.index.toString().padStart(3, '0')}.png` : undefined,
-      videoPath: shot.videoUrl ? `videos/shot_${shot.index.toString().padStart(3, '0')}.mp4` : undefined,
+      imagePath: config.includeImages && shot.imageUrl ? `images/shot_${shot.index.toString().padStart(3, '0')}.png` : undefined,
+      videoPath: config.includeVideos && shot.videoUrl ? `videos/shot_${shot.index.toString().padStart(3, '0')}.mp4` : undefined,
     })),
     characters: scriptData.characters.map((char) => ({
       name: char.name,
@@ -243,6 +251,8 @@ export async function exportProjectFiles(
   const manifestBlob = new Blob([JSON.stringify(manifest, null, 2)], { type: 'application/json' });
   triggerDownload(manifestBlob, `${projectName}_manifest.json`);
 
+  const failedFiles: string[] = [];
+
   // Download each file
   for (let i = 0; i < filesToDownload.length; i++) {
     const file = filesToDownload[i];
@@ -259,15 +269,16 @@ export async function exportProjectFiles(
       // Small delay between downloads to avoid browser blocking
       await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
-      console.error(`Failed to download ${file.filename}:`, error);
+      failedFiles.push(file.filename);
     }
   }
 
   onProgress?.({
     current: filesToDownload.length,
     total: filesToDownload.length,
-    message: '导出完成',
+    message: failedFiles.length ? `素材导出失败：${failedFiles.join('、')}` : '素材下载已交给浏览器，请检查下载目录',
   });
+  if (failedFiles.length) throw new ExportPartialFailure(failedFiles);
 }
 
 /**
@@ -306,6 +317,7 @@ export async function exportProjectToFolder(
     if (includeVideos) totalFiles += shots.filter(s => s.videoUrl).length;
     
     let currentFile = 0;
+    const failedFiles: string[] = [];
 
     // Write manifest
     const manifest = buildManifest(config);
@@ -331,11 +343,11 @@ export async function exportProjectToFolder(
           await writable.write(blob);
           await writable.close();
         } catch (error) {
-          console.error(`Failed to save ${filename}:`, error);
+          failedFiles.push(`images/${filename}`);
         }
         
         currentFile++;
-        onProgress?.({ current: currentFile, total: totalFiles, message: `已保存 ${filename}` });
+        onProgress?.({ current: currentFile, total: totalFiles, message: failedFiles.some(path => path.endsWith(`/${filename}`)) ? `保存失败 ${filename}` : `已保存 ${filename}` });
       }
     }
 
@@ -354,15 +366,16 @@ export async function exportProjectToFolder(
           await writable.write(blob);
           await writable.close();
         } catch (error) {
-          console.error(`Failed to save ${filename}:`, error);
+          failedFiles.push(`videos/${filename}`);
         }
         
         currentFile++;
-        onProgress?.({ current: currentFile, total: totalFiles, message: `已保存 ${filename}` });
+        onProgress?.({ current: currentFile, total: totalFiles, message: failedFiles.some(path => path.endsWith(`/${filename}`)) ? `保存失败 ${filename}` : `已保存 ${filename}` });
       }
     }
 
-    onProgress?.({ current: totalFiles, total: totalFiles, message: '导出完成' });
+    onProgress?.({ current: totalFiles, total: totalFiles, message: failedFiles.length ? `素材导出失败：${failedFiles.join('、')}` : '素材导出完成' });
+    if (failedFiles.length) throw new ExportPartialFailure(failedFiles);
     return true;
   } catch (error) {
     // User cancelled or API error
@@ -370,10 +383,8 @@ export async function exportProjectToFolder(
       console.log('[ExportService] User cancelled folder selection');
       return false;
     }
-    console.error('[ExportService] Export failed:', error);
-    // Fall back to file downloads
-    await exportProjectFiles(config, onProgress);
-    return false;
+    // Do not repeat side effects after a partially written folder.
+    throw error;
   }
 }
 
@@ -465,11 +476,11 @@ function buildDirectorManifest(config: DirectorExportConfig) {
       ambientSound: scene.ambientSound,
       narrativeFunction: scene.narrativeFunction,
       shotPurpose: scene.shotPurpose,
-      imagePath: (scene.imageDataUrl || scene.imageHttpUrl)
+      imagePath: config.includeImages && (scene.imageDataUrl || scene.imageHttpUrl)
         ? `images/scene_${(scene.id + 1).toString().padStart(3, '0')}.png` : undefined,
-      videoPath: scene.videoUrl
+      videoPath: config.includeVideos && scene.videoUrl
         ? `videos/scene_${(scene.id + 1).toString().padStart(3, '0')}.mp4` : undefined,
-      endFramePath: scene.endFrameImageUrl
+      endFramePath: config.includeEndFrames && scene.endFrameImageUrl
         ? `endframes/scene_${(scene.id + 1).toString().padStart(3, '0')}_endframe.png` : undefined,
     })),
   };
@@ -508,6 +519,7 @@ export async function exportDirectorToFolder(
     if (includeEndFrames) totalFiles += scenes.filter(s => s.endFrameImageUrl).length;
 
     let currentFile = 0;
+    const failedFiles: string[] = [];
 
     // Write manifest
     const manifest = buildDirectorManifest(config);
@@ -534,7 +546,7 @@ export async function exportDirectorToFolder(
           await writable.write(blob);
           await writable.close();
         } catch (error) {
-          console.error(`[ExportService] Failed to save ${filename}:`, error);
+          failedFiles.push(`images/${filename}`);
         }
         currentFile++;
       }
@@ -555,7 +567,7 @@ export async function exportDirectorToFolder(
           await writable.write(blob);
           await writable.close();
         } catch (error) {
-          console.error(`[ExportService] Failed to save ${filename}:`, error);
+          failedFiles.push(`videos/${filename}`);
         }
         currentFile++;
       }
@@ -576,22 +588,22 @@ export async function exportDirectorToFolder(
           await writable.write(blob);
           await writable.close();
         } catch (error) {
-          console.error(`[ExportService] Failed to save ${filename}:`, error);
+          failedFiles.push(`endframes/${filename}`);
         }
         currentFile++;
       }
     }
 
-    onProgress?.({ current: totalFiles, total: totalFiles, message: '导出完成' });
+    onProgress?.({ current: totalFiles, total: totalFiles, message: failedFiles.length ? `素材导出失败：${failedFiles.join('、')}` : '素材导出完成' });
+    if (failedFiles.length) throw new ExportPartialFailure(failedFiles);
     return true;
   } catch (error) {
     if ((error as Error).name === 'AbortError') {
       console.log('[ExportService] User cancelled folder selection');
       return false;
     }
-    console.error('[ExportService] Director export failed:', error);
-    await exportDirectorFiles(config, onProgress);
-    return false;
+    // A partially written folder is not a safe reason to start duplicate downloads.
+    throw error;
   }
 }
 
@@ -645,6 +657,8 @@ export async function exportDirectorFiles(
     });
   }
 
+  const failedFiles: string[] = [];
+
   for (let i = 0; i < filesToDownload.length; i++) {
     const file = filesToDownload[i];
     onProgress?.({
@@ -658,13 +672,14 @@ export async function exportDirectorFiles(
       triggerDownload(blob, file.filename);
       await new Promise(resolve => setTimeout(resolve, 500));
     } catch (error) {
-      console.error(`[ExportService] Failed to download ${file.filename}:`, error);
+      failedFiles.push(file.filename);
     }
   }
 
   onProgress?.({
     current: filesToDownload.length,
     total: filesToDownload.length,
-    message: '导出完成',
+    message: failedFiles.length ? `素材导出失败：${failedFiles.join('、')}` : '素材下载已交给浏览器，请检查下载目录',
   });
+  if (failedFiles.length) throw new ExportPartialFailure(failedFiles);
 }

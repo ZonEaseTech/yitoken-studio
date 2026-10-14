@@ -7,6 +7,8 @@
  * Based on CineGen-AI geminiService.ts patterns
  */
 
+import { generateYitokenChat, isYitokenRequest, supportsYitokenFeature } from "@/lib/ai/yitoken-client";
+import { useAPIConfigStore } from "@/stores/api-config-store";
 import type { ScriptData, ScriptCharacter, ScriptScene, ScriptParagraph, Shot } from "@/types/script";
 import { retryOperation } from "@/lib/utils/retry";
 import { cleanJsonString, safeParseJson, normalizeIds } from "@/lib/utils/json-cleaner";
@@ -284,6 +286,11 @@ export async function callChatAPI(
   }
   
   console.log('[callChatAPI] 请求 URL:', url);
+
+  if (isYitokenRequest(baseUrl, provider)) {
+    if (!supportsYitokenFeature('chat', model, useAPIConfigStore.getState().modelEndpointTypes)) throw new Error('此 YITOKEN 对话模型协议尚未适配，请选择兼容模型');
+    return generateYitokenChat({ apiKey: keyManager.getCurrentKey() || '', baseUrl, model, systemPrompt, prompt: userPrompt, temperature: options.temperature, maxTokens: effectiveMaxTokens });
+  }
 
   // Use retryOperation with key rotation on rate limit
   return await retryOperation(async () => {

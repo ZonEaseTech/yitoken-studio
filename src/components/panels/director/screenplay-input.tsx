@@ -16,7 +16,6 @@ import { useAPIConfigStore } from "@/stores/api-config-store";
 import { useCharacterLibraryStore, type Character } from "@/stores/character-library-store";
 import { useAppSettingsStore } from "@/stores/app-settings-store";
 import { useProjectStore } from "@/stores/project-store";
-import { getWorkerBridge, initializeWorkerBridge } from "@/lib/ai/worker-bridge";
 import { Wand2, ImagePlus, X, Settings, AlertCircle, Shuffle, ChevronDown, User, Users, Plus, Check, Monitor, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -445,66 +444,7 @@ export function ScreenplayInput({ onGenerateStoryboard }: ScreenplayInputProps) 
       return;
     }
 
-    // Legacy workflow: Check API keys for chat
-    const chatReady = isFeatureConfigured('script_analysis') || checkChatKeys().isAllConfigured;
-    if (!chatReady) {
-      toast.error('请在设置中配置「剧本分析/对话」的服务映射');
-      return;
-    }
-
-    setIsSubmitting(true);
-    startScreenplayGeneration(prompt, images.length > 0 ? images : undefined);
-
-    // Resolve actual style tokens
-    const actualStyleTokens = getSelectedStyleTokens();
-
-    // Update config with selected style tokens, aspect ratio, resolution and character reference images
-    const characterReferenceImages = getCharacterReferenceImages();
-    updateConfig({ 
-      styleTokens: [...actualStyleTokens],
-      characterReferenceImages,
-      aspectRatio,
-      resolution,
-      sceneCount,
-    } as any);
-
-    // Build prompt with character info
-    const fullPrompt = buildPromptWithCharacters();
-
-    try {
-      // Initialize worker and generate screenplay
-      const bridge = await initializeWorkerBridge();
-      
-      // Get API key and provider
-      const chatApiKey = getApiKey('memefast');
-      const chatProvider = 'memefast';
-      
-      const screenplay = await bridge.generateScreenplay(fullPrompt, images, {
-        aspectRatio,
-        resolution,
-        sceneCount,
-        styleTokens: actualStyleTokens,
-        apiKey: chatApiKey,
-        chatProvider,
-        baseUrl: typeof window !== 'undefined' ? window.location.origin : '',
-      } as any);
-
-      // DirectorStore will be updated via onScreenplayGenerated callback
-      useDirectorStore.getState().onScreenplayGenerated(screenplay);
-      
-      toast.success("剧本生成成功！");
-    } catch (error) {
-      const err = error as Error;
-      console.error("[ScreenplayInput] Generation failed:", err);
-      setScreenplayError(err.message);
-      toast.error(`剧本生成失败: ${err.message}`);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleExampleClick = (example: string) => {
-    setPrompt(example);
+    toast.error('旧剧本入口未接入，请使用剧本面板或新故事板流程；未提交付费请求。');
   };
 
   return (
@@ -528,7 +468,7 @@ export function ScreenplayInput({ onGenerateStoryboard }: ScreenplayInputProps) 
           {EXAMPLE_PROMPTS.map((example, i) => (
             <button
               key={i}
-              onClick={() => handleExampleClick(example)}
+              onClick={() => setPrompt(example)}
               className="text-xs px-2 py-1 rounded-full bg-muted hover:bg-muted/80 transition-colors truncate max-w-[150px]"
               disabled={isSubmitting}
             >
@@ -882,7 +822,7 @@ export function ScreenplayInput({ onGenerateStoryboard }: ScreenplayInputProps) 
       <div className="flex gap-2">
         <Button
           onClick={handleSubmit}
-          disabled={!prompt.trim() || isSubmitting || !isSceneCountValid || (!onGenerateStoryboard && !isFeatureConfigured('script_analysis') && !checkChatKeys().isAllConfigured)}
+          disabled={!onGenerateStoryboard || !prompt.trim() || isSubmitting || !isSceneCountValid}
           className="flex-1"
           size="lg"
         >
@@ -894,7 +834,7 @@ export function ScreenplayInput({ onGenerateStoryboard }: ScreenplayInputProps) 
           ) : (
             <>
               <Wand2 className="h-4 w-4 mr-2" />
-              {onGenerateStoryboard ? "生成故事板" : "生成剧本"}
+              {onGenerateStoryboard ? "生成故事板" : "旧剧本入口未接入"}
             </>
           )}
         </Button>

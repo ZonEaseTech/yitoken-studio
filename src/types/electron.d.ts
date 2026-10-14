@@ -7,6 +7,8 @@ export {};
 
 declare global {
   interface Window {
+    filmRenderer?: import('./film-render').FilmRendererBridge;
+    secureApiConfig?: import('../lib/secure-api-storage').SecureConfigBridge;
     ipcRenderer?: {
       on: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void;
       off: (channel: string, listener: (event: unknown, ...args: unknown[]) => void) => void;
@@ -17,7 +19,7 @@ declare global {
       saveImage: (url: string, category: string, filename: string) => Promise<{ success: boolean; localPath?: string; error?: string }>;
       getImagePath: (localPath: string) => Promise<string | null>;
       deleteImage: (localPath: string) => Promise<boolean>;
-      readAsBase64: (localPath: string) => Promise<string | null>;
+      readAsBase64: (localPath: string) => Promise<{ success: boolean; base64?: string; mimeType?: string; size?: number; error?: string }>;
       getAbsolutePath: (localPath: string) => Promise<string | null>;
     };
     fileStorage?: {

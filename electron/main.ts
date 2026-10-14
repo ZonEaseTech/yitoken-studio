@@ -1,11 +1,16 @@
 // Copyright (c) 2025 hotflow2024
 // Licensed under AGPL-3.0-or-later. See LICENSE for details.
 // Commercial licensing available. See COMMERCIAL_LICENSE.md.
-import { app, BrowserWindow, ipcMain, protocol, net, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, protocol, net, dialog, shell, safeStorage } from 'electron'
+import type { IpcMainInvokeEvent } from 'electron'
+import { pathToFileURL } from 'node:url'
+import { assertTrustedSender, containedStoragePath, isTrustedAppUrl, resolveMediaPath, trustedExternalUrl, trustedDevelopmentUrl } from './security-policy'
+import { createCredentialStore } from './credential-store'
+import { FilmRenderManager } from './film-renderer'
+import { downloadFilmAsset, MAX_FILM_CLIP_BYTES } from './film-download'
+import type { FilmRenderRequest } from '../src/types/film-render'
 import path from 'node:path'
 import fs from 'node:fs'
-import https from 'node:https'
-import http from 'node:http'
 import os from 'node:os'
 import packageMetadata from '../package.json'
 import type { AvailableUpdateInfo, OpenExternalResult, UpdateCheckResult, UpdateManifest } from '../src/types/update'
@@ -22,7 +27,7 @@ import type { AvailableUpdateInfo, OpenExternalResult, UpdateCheckResult, Update
 //
 process.env.APP_ROOT = path.join(__dirname, '../..')
 
-export const VITE_DEV_SERVER_URL = process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL']
+export const VITE_DEV_SERVER_URL = trustedDevelopmentUrl(process.env['ELECTRON_RENDERER_URL'] || process.env['VITE_DEV_SERVER_URL'], app.isPackaged)
 export const MAIN_DIST = path.join(__dirname)
 export const RENDERER_DIST = path.join(__dirname, '../renderer')
 
@@ -47,17 +52,37 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0
 }
 
-function sanitizeExternalUrl(value?: string) {
-  if (!isNonEmptyString(value)) return undefined
-  try {
-    const parsed = new URL(value)
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      return undefined
+const sanitizeExternalUrl = trustedExternalUrl
+
+const selectedDirectories = new Set<string>()
+const selectedDirectoryChannels = new Set([
+  'storage-validate-data-dir', 'storage-link-data', 'storage-move-data', 'storage-export-data', 'storage-import-data',
+  'storage-validate-project-dir', 'storage-link-project-data', 'storage-link-media-data',
+  'storage-export-project-data', 'storage-import-project-data', 'storage-export-media-data', 'storage-import-media-data',
+])
+function appDocumentUrl() {
+  return VITE_DEV_SERVER_URL || pathToFileURL(path.join(RENDERER_DIST, 'index.html')).toString()
+}
+const filmConflictingStorageChannels = new Set([
+  'storage-move-data', 'storage-link-data', 'storage-import-data',
+  'storage-link-project-data', 'storage-link-media-data',
+  'storage-import-project-data', 'storage-import-media-data',
+  'storage-update-config', 'storage-clear-cache',
+])
+let activeStorageMutations = 0
+function trustedHandle(channel: string, listener: (event: IpcMainInvokeEvent, ...args: any[]) => any) {
+  ipcMain.handle(channel, async (event, ...args) => {
+    assertTrustedSender(event, win?.webContents, appDocumentUrl())
+    if (filmConflictingStorageChannels.has(channel) && filmRenderManager?.isBusy()) throw new Error('整片合成进行中，暂不能迁移、导入、修改存储或清理缓存；请先完成或取消任务。')
+    if (selectedDirectoryChannels.has(channel)) {
+      const target = args[0]
+      if (typeof target !== 'string' || !path.isAbsolute(target) || !selectedDirectories.has(fs.realpathSync(target))) throw new Error('Directory must be selected using the native application dialog')
     }
-    return parsed.toString()
-  } catch {
-    return undefined
-  }
+    if (!filmConflictingStorageChannels.has(channel)) return listener(event, ...args)
+    activeStorageMutations += 1
+    try { return await listener(event, ...args) }
+    finally { activeStorageMutations -= 1 }
+  })
 }
 
 function normalizeVersionParts(version: string) {
@@ -112,7 +137,7 @@ async function fetchUpdateManifest() {
   const requestUrl = new URL(manifestUrl)
   requestUrl.searchParams.set('_ts', Date.now().toString())
 
-  const response = await net.fetch(requestUrl.toString())
+  const response = await net.fetch(requestUrl.toString(), { redirect: 'error' })
   if (!response.ok) {
     throw new Error(`版本清单请求失败 (${response.status})`)
   }
@@ -159,13 +184,19 @@ async function resolveAvailableUpdate(currentVersion: string): Promise<Available
 
 function createWindow() {
   win = new BrowserWindow({
-    title: '魔因漫创',
+    title: 'YITOKEN Studio',
     width: 1400,
     height: 900,
     minWidth: 1200,
     minHeight: 700,
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
     },
   })
 
@@ -174,22 +205,28 @@ function createWindow() {
     win?.webContents.send('main-process-message', (new Date).toLocaleString())
   })
 
-  // Open external links in system browser instead of inside Electron
+  // Existing prompt/name copy actions need only sanitized text writes, never clipboard reads.
+  win.webContents.session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    callback(contents === win?.webContents && permission === 'clipboard-sanitized-write' && details.isMainFrame && isTrustedAppUrl(details.requestingUrl, appDocumentUrl()))
+  })
+  win.webContents.session.setPermissionCheckHandler((contents, permission, _origin, details) => {
+    return contents === win?.webContents && permission === 'clipboard-sanitized-write' && details.isMainFrame && !!details.requestingUrl && isTrustedAppUrl(details.requestingUrl, appDocumentUrl())
+  })
+  win.webContents.on('will-attach-webview', event => event.preventDefault())
+  win.on('closed', () => selectedDirectories.clear())
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('http://') || url.startsWith('https://')) {
-      shell.openExternal(url)
-    }
+    const allowed = trustedExternalUrl(url)
+    if (allowed) void shell.openExternal(allowed).catch(() => {})
     return { action: 'deny' }
   })
-
-  win.webContents.on('will-navigate', (event, url) => {
-    // Allow navigating to the app itself (dev server or local file)
-    if (VITE_DEV_SERVER_URL && url.startsWith(VITE_DEV_SERVER_URL)) return
-    if (url.startsWith('file://')) return
-    // Block and open externally
+  const restrictNavigation = (event: { preventDefault: () => void }, url: string) => {
+    if (isTrustedAppUrl(url, appDocumentUrl())) return
     event.preventDefault()
-    shell.openExternal(url)
-  })
+    const allowed = trustedExternalUrl(url)
+    if (allowed) void shell.openExternal(allowed).catch(() => {})
+  }
+  win.webContents.on('will-navigate', restrictNavigation)
+  win.webContents.on('will-redirect', restrictNavigation)
 
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL)
@@ -309,13 +346,13 @@ function getStorageBasePath() {
 }
 
 function getProjectDataRoot() {
-  const base = path.join(getStorageBasePath(), 'projects')
+  const base = containedStoragePath(getStorageBasePath(), 'projects')
   ensureDir(base)
   return base
 }
 
 function getMediaRoot() {
-  const base = path.join(getStorageBasePath(), 'media')
+  const base = containedStoragePath(getStorageBasePath(), 'media')
   ensureDir(base)
   return base
 }
@@ -323,9 +360,9 @@ function getMediaRoot() {
 function getCacheDirs() {
   const userData = app.getPath('userData')
   return [
-    path.join(userData, 'Cache'),
-    path.join(userData, 'Code Cache'),
-    path.join(userData, 'GPUCache'),
+    containedStoragePath(userData, 'Cache'),
+    containedStoragePath(userData, 'Code Cache'),
+    containedStoragePath(userData, 'GPUCache'),
   ]
 }
 
@@ -417,52 +454,17 @@ async function clearCache(olderThanDays?: number): Promise<number> {
 
 // Get user data path for storing images
 const getImagesDir = (subDir: string) => {
-  const imagesDir = path.join(getMediaRoot(), subDir)
+  const imagesDir = containedStoragePath(getMediaRoot(), subDir)
   if (!fs.existsSync(imagesDir)) {
     fs.mkdirSync(imagesDir, { recursive: true })
   }
   return imagesDir
 }
 
-// Download image from URL and save to local file
-const downloadImage = (url: string, filePath: string, maxRedirects: number = 5): Promise<void> => {
-  return new Promise((resolve, reject) => {
-    if (maxRedirects <= 0) {
-      reject(new Error('Too many redirects'))
-      return
-    }
-    const protocol = url.startsWith('https') ? https : http
-    const file = fs.createWriteStream(filePath)
-    
-    protocol.get(url, (response) => {
-      const status = response.statusCode ?? 0
-      if ([301, 302, 303, 307, 308].includes(status)) {
-        file.close()
-        const redirectUrl = response.headers.location
-        if (redirectUrl) {
-          downloadImage(redirectUrl, filePath, maxRedirects - 1).then(resolve).catch(reject)
-          return
-        }
-      }
-      
-      if (status !== 200) {
-        file.close()
-        fs.unlink(filePath, () => {})
-        reject(new Error(`Failed to download: ${status}`))
-        return
-      }
-      
-      response.pipe(file)
-      file.on('finish', () => {
-        file.close()
-        resolve()
-      })
-    }).on('error', (err) => {
-      file.close()
-      fs.unlink(filePath, () => {})
-      reject(err)
-    })
-  })
+// The existing image/video cache shares the film transport's HTTPS/public-DNS boundary.
+const downloadImage = (url: string, filePath: string): Promise<void> => {
+  const video = /\.(?:mp4|webm|mov|avi|mkv)$/i.test(filePath)
+  return downloadFilmAsset(url, filePath, new AbortController().signal, video ? MAX_FILM_CLIP_BYTES : 64 * 1024 * 1024, 'image/*, video/*, application/octet-stream;q=0.8')
 }
 
 type ImageHostUploadProvider = {
@@ -580,20 +582,7 @@ function parseDataUrl(dataUrl: string): { buffer: Buffer, mimeType: string } | n
 }
 
 function resolveImageSourcePath(imagePath: string): string | null {
-  const localImageMatch = imagePath.match(/^local-image:\/\/(.+)\/(.+)$/)
-  if (localImageMatch) {
-    const [, category, filename] = localImageMatch
-    return path.join(getMediaRoot(), category, decodeURIComponent(filename))
-  }
-
-  if (imagePath.startsWith('file://')) {
-    return imagePath.replace(/^file:\/\/\/?/, '')
-  }
-
-  if (path.isAbsolute(imagePath)) {
-    return imagePath
-  }
-
+  if (imagePath.startsWith('local-image://') || imagePath.startsWith('local-video://') || imagePath.startsWith('file:') || path.isAbsolute(imagePath)) return resolveMediaPath(getMediaRoot(), imagePath)
   return null
 }
 
@@ -602,7 +591,10 @@ async function fetchBuffer(url: string, timeoutMs: number = 45000) {
   const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
+    const parsedUrl = new URL(url)
+    if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password) throw new Error('Only HTTPS media requests are allowed')
     const response = await fetch(url, {
+      redirect: 'error',
       headers: {
         Accept: 'image/*, */*;q=0.8',
       },
@@ -735,9 +727,8 @@ async function uploadImageHostFromMain({
     }
 
     const url = new URL(uploadUrl)
-    if (provider.apiKeyParam && apiKey) {
-      url.searchParams.set(provider.apiKeyParam, apiKey)
-    }
+    if (url.protocol !== 'https:' || url.username || url.password) return { success: false, error: '图床上传必须使用 HTTPS 且不得在 URL 中包含凭据' }
+    if (provider.apiKeyParam && apiKey) return { success: false, error: '不支持把图床密钥放入 URL，请使用请求头或表单字段' }
     if (provider.expirationParam && options?.expiration) {
       url.searchParams.set(provider.expirationParam, String(options.expiration))
     }
@@ -755,6 +746,7 @@ async function uploadImageHostFromMain({
     try {
       const response = await fetch(url.toString(), {
         method: 'POST',
+        redirect: 'error',
         headers,
         body: formData,
         signal: controller.signal,
@@ -799,7 +791,7 @@ async function uploadImageHostFromMain({
       console.warn('[ImageHost/Main] Upload succeeded but no URL was detected in the response', {
         provider: provider.name,
         platform: provider.platform,
-        responsePreview: trimmedText.substring(0, 200),
+        // Do not log response bodies: providers can echo credential-bearing URLs.
       })
       return { success: false, error: `图床 ${provider.name} 上传成功但未返回 URL` }
     } catch (error) {
@@ -816,12 +808,14 @@ async function uploadImageHostFromMain({
 }
 
 // IPC handlers for image management
-ipcMain.handle('save-image', async (_event, { url, category, filename }) => {
+trustedHandle('save-image', async (_event, { url, category, filename }) => {
   try {
     const imagesDir = getImagesDir(category)
     const ext = path.extname(filename) || '.png'
     const safeName = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`
-    const filePath = path.join(imagesDir, safeName)
+    const filePath = containedStoragePath(imagesDir, safeName)
+    const maxBytes = /\.(?:mp4|webm|mov|avi|mkv)$/i.test(safeName) ? MAX_FILM_CLIP_BYTES : 64 * 1024 * 1024
+    if (typeof url !== 'string' || url.length > Math.ceil(maxBytes * 4 / 3) + 1024) throw new Error('Media exceeds storage size limit')
     
     // data: URL — 直接解码 base64 写入文件（canvas 切割产物）
     if (url.startsWith('data:')) {
@@ -830,8 +824,8 @@ ipcMain.handle('save-image', async (_event, { url, category, filename }) => {
         return { success: false, error: 'Invalid data URL format' }
       }
       const buffer = Buffer.from(matches[1], 'base64')
-      if (buffer.length === 0) {
-        return { success: false, error: 'Decoded base64 data is empty (0 bytes)' }
+      if (buffer.length === 0 || buffer.length > maxBytes) {
+        return { success: false, error: 'Decoded media is empty or exceeds storage size limit' }
       }
       fs.writeFileSync(filePath, buffer)
     } else {
@@ -853,13 +847,13 @@ ipcMain.handle('save-image', async (_event, { url, category, filename }) => {
   }
 })
 
-ipcMain.handle('get-image-path', async (_event, localPath: string) => {
+trustedHandle('get-image-path', async (_event, localPath: string) => {
   // Convert local-image://category/filename to actual file path
   const match = localPath.match(/^local-image:\/\/(.+)\/(.+)$/)
   if (!match) return null
   
   const [, category, filename] = match
-  const filePath = path.join(getMediaRoot(), category, filename)
+  const filePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
   
   if (fs.existsSync(filePath)) {
     // Windows: file:///H:/path/to/file.png (三斜杠 + 正斜杠)
@@ -868,12 +862,12 @@ ipcMain.handle('get-image-path', async (_event, localPath: string) => {
   return null
 })
 
-ipcMain.handle('delete-image', async (_event, localPath: string) => {
+trustedHandle('delete-image', async (_event, localPath: string) => {
   const match = localPath.match(/^local-image:\/\/(.+)\/(.+)$/)
   if (!match) return false
   
   const [, category, filename] = match
-  const filePath = path.join(getMediaRoot(), category, filename)
+  const filePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
   
   try {
     if (fs.existsSync(filePath)) {
@@ -886,7 +880,7 @@ ipcMain.handle('delete-image', async (_event, localPath: string) => {
 })
 
 // Read local image as base64 (for AI API calls)
-ipcMain.handle('read-image-base64', async (_event, localPath: string) => {
+trustedHandle('read-image-base64', async (_event, localPath: string) => {
   try {
     let filePath: string
     
@@ -894,11 +888,11 @@ ipcMain.handle('read-image-base64', async (_event, localPath: string) => {
     const match = localPath.match(/^local-image:\/\/(.+)\/(.+)$/)
     if (match) {
       const [, category, filename] = match
-      filePath = path.join(getMediaRoot(), category, decodeURIComponent(filename))
+      filePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
     } else if (localPath.startsWith('file://')) {
-      filePath = localPath.replace('file://', '')
+      filePath = resolveMediaPath(getMediaRoot(), localPath)
     } else {
-      filePath = localPath
+      filePath = resolveMediaPath(getMediaRoot(), localPath)
     }
     
     if (!fs.existsSync(filePath)) {
@@ -925,12 +919,12 @@ ipcMain.handle('read-image-base64', async (_event, localPath: string) => {
 })
 
 // Get absolute file path for a local-image:// URL
-ipcMain.handle('get-absolute-path', async (_event, localPath: string) => {
+trustedHandle('get-absolute-path', async (_event, localPath: string) => {
   const match = localPath.match(/^local-image:\/\/(.+)\/(.+)$/)
   if (!match) return null
   
   const [, category, filename] = match
-  const filePath = path.join(getMediaRoot(), category, decodeURIComponent(filename))
+  const filePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
   
   if (fs.existsSync(filePath)) {
     return filePath
@@ -938,7 +932,7 @@ ipcMain.handle('get-absolute-path', async (_event, localPath: string) => {
   return null
 })
 
-ipcMain.handle('image-host-upload', async (_event, payload: ImageHostUploadRequest) => {
+trustedHandle('image-host-upload', async (_event, payload: ImageHostUploadRequest) => {
   return uploadImageHostFromMain(payload)
 })
 
@@ -951,23 +945,25 @@ const getDataDir = () => {
   return dataDir
 }
 
-ipcMain.handle('file-storage-get', async (_event, key: string) => {
+trustedHandle('file-storage-get', async (_event, key: string) => {
   try {
-    const filePath = path.join(getDataDir(), `${key}.json`)
-    if (fs.existsSync(filePath)) {
-      const data = fs.readFileSync(filePath, 'utf-8')
-      return data
-    }
-    return null
+    const root = getDataDir()
+    containedStoragePath(root, key)
+    const filePath = containedStoragePath(root, `${key}.json`)
+    return fs.readFileSync(filePath, 'utf-8')
   } catch (error) {
-    console.error('Failed to read file storage:', error)
-    return null
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    // A failed read must not look like an empty/new project to persistence callers.
+    console.warn('Project storage read failed; original data was preserved')
+    throw new Error('项目数据读取失败；原文件未改动，请检查磁盘权限后重试。')
   }
 })
 
-ipcMain.handle('file-storage-set', async (_event, key: string, value: string) => {
+trustedHandle('file-storage-set', async (_event, key: string, value: string) => {
   try {
-    const filePath = path.join(getDataDir(), `${key}.json`)
+    const root = getDataDir()
+    containedStoragePath(root, key) // Validate the original key before appending an extension.
+    const filePath = containedStoragePath(root, `${key}.json`)
     // Ensure parent directory exists (supports nested keys like _p/xxx/script)
     const parentDir = path.dirname(filePath)
     ensureDir(parentDir)
@@ -980,9 +976,11 @@ ipcMain.handle('file-storage-set', async (_event, key: string, value: string) =>
   }
 })
 
-ipcMain.handle('file-storage-remove', async (_event, key: string) => {
+trustedHandle('file-storage-remove', async (_event, key: string) => {
   try {
-    const filePath = path.join(getDataDir(), `${key}.json`)
+    const root = getDataDir()
+    containedStoragePath(root, key) // Validate the original key before appending an extension.
+    const filePath = containedStoragePath(root, `${key}.json`)
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath)
     }
@@ -994,9 +992,11 @@ ipcMain.handle('file-storage-remove', async (_event, key: string) => {
 })
 
 // Check if a storage key exists
-ipcMain.handle('file-storage-exists', async (_event, key: string) => {
+trustedHandle('file-storage-exists', async (_event, key: string) => {
   try {
-    const filePath = path.join(getDataDir(), `${key}.json`)
+    const root = getDataDir()
+    containedStoragePath(root, key) // Validate the original key before appending an extension.
+    const filePath = containedStoragePath(root, `${key}.json`)
     return fs.existsSync(filePath)
   } catch {
     return false
@@ -1004,9 +1004,9 @@ ipcMain.handle('file-storage-exists', async (_event, key: string) => {
 })
 
 // List sub-directories under a directory prefix (used to discover project IDs under _p/)
-ipcMain.handle('file-storage-list-dirs', async (_event, prefix: string) => {
+trustedHandle('file-storage-list-dirs', async (_event, prefix: string) => {
   try {
-    const dirPath = path.join(getDataDir(), prefix)
+    const dirPath = containedStoragePath(getDataDir(), prefix)
     if (!fs.existsSync(dirPath)) return []
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true })
     return entries
@@ -1018,9 +1018,9 @@ ipcMain.handle('file-storage-list-dirs', async (_event, prefix: string) => {
 })
 
 // List all JSON keys under a directory prefix
-ipcMain.handle('file-storage-list', async (_event, prefix: string) => {
+trustedHandle('file-storage-list', async (_event, prefix: string) => {
   try {
-    const dirPath = path.join(getDataDir(), prefix)
+    const dirPath = containedStoragePath(getDataDir(), prefix)
     if (!fs.existsSync(dirPath)) return []
     const entries = await fs.promises.readdir(dirPath, { withFileTypes: true })
     return entries
@@ -1032,9 +1032,9 @@ ipcMain.handle('file-storage-list', async (_event, prefix: string) => {
 })
 
 // Remove an entire directory (for project deletion)
-ipcMain.handle('file-storage-remove-dir', async (_event, prefix: string) => {
+trustedHandle('file-storage-remove-dir', async (_event, prefix: string) => {
   try {
-    const dirPath = path.join(getDataDir(), prefix)
+    const dirPath = containedStoragePath(getDataDir(), prefix)
     if (fs.existsSync(dirPath)) {
       await fs.promises.rm(dirPath, { recursive: true, force: true })
     }
@@ -1045,7 +1045,7 @@ ipcMain.handle('file-storage-remove-dir', async (_event, prefix: string) => {
   }
 })
 // ==================== Storage Manager ====================
-ipcMain.handle('storage-get-paths', async () => {
+trustedHandle('storage-get-paths', async () => {
   return {
     basePath: getStorageBasePath(),
     projectPath: getProjectDataRoot(),
@@ -1054,16 +1054,18 @@ ipcMain.handle('storage-get-paths', async () => {
   }
 })
 
-ipcMain.handle('storage-select-directory', async () => {
+trustedHandle('storage-select-directory', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory', 'createDirectory'],
   })
   if (result.canceled || !result.filePaths[0]) return null
-  return result.filePaths[0]
+  const selected = fs.realpathSync(result.filePaths[0])
+  selectedDirectories.add(selected)
+  return selected
 })
 
 // Validate if a directory contains valid data (projects/ subfolder with .json files or _p/ dirs)
-ipcMain.handle('storage-validate-data-dir', async (_event, dirPath: string) => {
+trustedHandle('storage-validate-data-dir', async (_event, dirPath: string) => {
   try {
     if (!dirPath) return { valid: false, error: '路径不能为空' }
     const target = normalizePath(dirPath)
@@ -1105,7 +1107,7 @@ ipcMain.handle('storage-validate-data-dir', async (_event, dirPath: string) => {
 })
 
 // Link to existing data directory (no data movement)
-ipcMain.handle('storage-link-data', async (_event, dirPath: string) => {
+trustedHandle('storage-link-data', async (_event, dirPath: string) => {
   try {
     if (!dirPath) return { success: false, error: '路径不能为空' }
     const target = normalizePath(dirPath)
@@ -1135,7 +1137,7 @@ ipcMain.handle('storage-link-data', async (_event, dirPath: string) => {
 })
 
 // Move all data to new location (single operation)
-ipcMain.handle('storage-move-data', async (_event, newPath: string) => {
+trustedHandle('storage-move-data', async (_event, newPath: string) => {
   try {
     if (!newPath) return { success: false, error: '路径不能为空' }
     const target = normalizePath(newPath)
@@ -1200,7 +1202,7 @@ ipcMain.handle('storage-move-data', async (_event, newPath: string) => {
 })
 
 // Export all data
-ipcMain.handle('storage-export-data', async (_event, targetPath: string) => {
+trustedHandle('storage-export-data', async (_event, targetPath: string) => {
   try {
     if (!targetPath) return { success: false, error: '路径不能为空' }
     const exportDir = path.join(
@@ -1227,7 +1229,7 @@ ipcMain.handle('storage-export-data', async (_event, targetPath: string) => {
 })
 
 // Import all data (with backup for safety)
-ipcMain.handle('storage-import-data', async (_event, sourcePath: string) => {
+trustedHandle('storage-import-data', async (_event, sourcePath: string) => {
   try {
     if (!sourcePath) return { success: false, error: '路径不能为空' }
     const source = normalizePath(sourcePath)
@@ -1307,12 +1309,12 @@ ipcMain.handle('storage-import-data', async (_event, sourcePath: string) => {
 })
 
 // Legacy handlers (kept for backward compatibility but redirect to new ones)
-ipcMain.handle('storage-validate-project-dir', async (_event, dirPath: string) => {
+trustedHandle('storage-validate-project-dir', async (_event, dirPath: string) => {
   // Redirect to new unified handler
   return ipcMain.emit('storage-validate-data-dir', null, dirPath)
 })
 
-ipcMain.handle('storage-link-project-data', async (_event, dirPath: string) => {
+trustedHandle('storage-link-project-data', async (_event, dirPath: string) => {
   // For legacy: assume dirPath is the projects folder, use parent as base
   const target = normalizePath(dirPath)
   const basePath = path.dirname(target)
@@ -1323,7 +1325,7 @@ ipcMain.handle('storage-link-project-data', async (_event, dirPath: string) => {
   return { success: true, path: basePath }
 })
 
-ipcMain.handle('storage-link-media-data', async (_event, dirPath: string) => {
+trustedHandle('storage-link-media-data', async (_event, dirPath: string) => {
   // For legacy: assume dirPath is the media folder, use parent as base
   const target = normalizePath(dirPath)
   const basePath = path.dirname(target)
@@ -1334,14 +1336,14 @@ ipcMain.handle('storage-link-media-data', async (_event, dirPath: string) => {
   return { success: true, path: basePath }
 })
 
-ipcMain.handle('storage-move-project-data', async () => {
+trustedHandle('storage-move-project-data', async () => {
   return { success: false, error: '请使用新的统一存储路径功能' }
 })
-ipcMain.handle('storage-move-media-data', async () => {
+trustedHandle('storage-move-media-data', async () => {
   return { success: false, error: '请使用新的统一存储路径功能' }
 })
 
-ipcMain.handle('storage-export-project-data', async (_event, targetPath: string) => {
+trustedHandle('storage-export-project-data', async (_event, targetPath: string) => {
   // Redirect to unified export
   try {
     if (!targetPath) return { success: false, error: '路径不能为空' }
@@ -1359,7 +1361,7 @@ ipcMain.handle('storage-export-project-data', async (_event, targetPath: string)
   }
 })
 
-ipcMain.handle('storage-import-project-data', async (_event, sourcePath: string) => {
+trustedHandle('storage-import-project-data', async (_event, sourcePath: string) => {
   try {
     if (!sourcePath) return { success: false, error: '路径不能为空' }
     const source = normalizePath(sourcePath)
@@ -1421,7 +1423,7 @@ ipcMain.handle('storage-import-project-data', async (_event, sourcePath: string)
   }
 })
 
-ipcMain.handle('storage-export-media-data', async (_event, targetPath: string) => {
+trustedHandle('storage-export-media-data', async (_event, targetPath: string) => {
   // Legacy: redirect to unified export
   try {
     if (!targetPath) return { success: false, error: '路径不能为空' }
@@ -1440,7 +1442,7 @@ ipcMain.handle('storage-export-media-data', async (_event, targetPath: string) =
   }
 })
 
-ipcMain.handle('storage-import-media-data', async (_event, sourcePath: string) => {
+trustedHandle('storage-import-media-data', async (_event, sourcePath: string) => {
   try {
     if (!sourcePath) return { success: false, error: '路径不能为空' }
     const target = getMediaRoot()
@@ -1477,7 +1479,7 @@ ipcMain.handle('storage-import-media-data', async (_event, sourcePath: string) =
   }
 })
 
-ipcMain.handle('storage-get-cache-size', async () => {
+trustedHandle('storage-get-cache-size', async () => {
   const dirs = getCacheDirs()
   const details = await Promise.all(
     dirs.map(async (dirPath) => ({
@@ -1489,7 +1491,7 @@ ipcMain.handle('storage-get-cache-size', async () => {
   return { total, details }
 })
 
-ipcMain.handle('storage-clear-cache', async (_event, options?: { olderThanDays?: number }) => {
+trustedHandle('storage-clear-cache', async (_event, options?: { olderThanDays?: number }) => {
   try {
     const clearedBytes = await clearCache(options?.olderThanDays)
     return { success: true, clearedBytes }
@@ -1499,18 +1501,20 @@ ipcMain.handle('storage-clear-cache', async (_event, options?: { olderThanDays?:
   }
 })
 
-ipcMain.handle('storage-update-config', async (_event, config: { autoCleanEnabled?: boolean; autoCleanDays?: number }) => {
-  storageConfig = { ...storageConfig, ...config }
+trustedHandle('storage-update-config', async (_event, config: { autoCleanEnabled?: boolean; autoCleanDays?: number }) => {
+  if (!config || typeof config !== 'object') throw new Error('Invalid storage configuration')
+  if (typeof config.autoCleanEnabled === 'boolean') storageConfig.autoCleanEnabled = config.autoCleanEnabled
+  if (typeof config.autoCleanDays === 'number' && Number.isInteger(config.autoCleanDays) && config.autoCleanDays >= 1 && config.autoCleanDays <= 3650) storageConfig.autoCleanDays = config.autoCleanDays
   saveStorageConfig()
   scheduleAutoClean()
   return true
 })
 
-ipcMain.handle('app-updater-get-current-version', async () => {
+trustedHandle('app-updater-get-current-version', async () => {
   return app.getVersion()
 })
 
-ipcMain.handle('app-updater-check', async (): Promise<UpdateCheckResult> => {
+trustedHandle('app-updater-check', async (): Promise<UpdateCheckResult> => {
   const currentVersion = app.getVersion()
   try {
     const update = await resolveAvailableUpdate(currentVersion)
@@ -1530,7 +1534,7 @@ ipcMain.handle('app-updater-check', async (): Promise<UpdateCheckResult> => {
   }
 })
 
-ipcMain.handle('app-updater-open-link', async (_event, url: string): Promise<OpenExternalResult> => {
+trustedHandle('app-updater-open-link', async (_event, url: string): Promise<OpenExternalResult> => {
   const safeUrl = sanitizeExternalUrl(url)
   if (!safeUrl) {
     return { success: false, error: '无效下载链接' }
@@ -1549,7 +1553,7 @@ ipcMain.handle('app-updater-open-link', async (_event, url: string): Promise<Ope
 })
 
 // ==================== File Export (Save Dialog) ====================
-ipcMain.handle('save-file-dialog', async (_event, { localPath, defaultPath, filters }: { localPath: string, defaultPath: string, filters: { name: string, extensions: string[] }[] }) => {
+trustedHandle('save-file-dialog', async (_event, { localPath, defaultPath, filters }: { localPath: string, defaultPath: string, filters: { name: string, extensions: string[] }[] }) => {
   try {
     // Resolve the source file path
     let sourcePath: string | null = null
@@ -1560,14 +1564,14 @@ ipcMain.handle('save-file-dialog', async (_event, { localPath, defaultPath, filt
     
     if (imageMatch) {
       const [, category, filename] = imageMatch
-      sourcePath = path.join(getMediaRoot(), category, decodeURIComponent(filename))
+      sourcePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
     } else if (videoMatch) {
       const [, category, filename] = videoMatch
-      sourcePath = path.join(getMediaRoot(), category, decodeURIComponent(filename))
+      sourcePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
     } else if (localPath.startsWith('file://')) {
-      sourcePath = localPath.replace('file://', '')
+      sourcePath = resolveMediaPath(getMediaRoot(), localPath)
     } else {
-      sourcePath = localPath
+      sourcePath = resolveMediaPath(getMediaRoot(), localPath)
     }
     
     if (!sourcePath || !fs.existsSync(sourcePath)) {
@@ -1665,7 +1669,7 @@ protocol.registerSchemesAsPrivileged([{
   privileges: {
     secure: true,
     supportFetchAPI: true,
-    bypassCSP: true,
+    bypassCSP: false,
     stream: true,
   }
 }])
@@ -1682,7 +1686,7 @@ app.whenReady().then(() => {
       const url = new URL(request.url)
       const category = url.hostname
       const filename = decodeURIComponent(url.pathname.slice(1)) // Remove leading / and decode
-      const filePath = path.join(getMediaRoot(), category, filename)
+      const filePath = containedStoragePath(getMediaRoot(), `${decodeURIComponent(category)}/${decodeURIComponent(filename)}`)
       
       // Read file directly
       const data = fs.readFileSync(filePath)
@@ -1707,7 +1711,7 @@ app.whenReady().then(() => {
       const mimeType = mimeTypes[ext] || 'application/octet-stream'
       
       return new Response(data, {
-        headers: { 'Content-Type': mimeType }
+        headers: { 'Content-Type': mimeType, 'X-Content-Type-Options': 'nosniff' }
       })
     } catch (error) {
       console.error('Failed to load local image:', error)
@@ -1716,4 +1720,45 @@ app.whenReady().then(() => {
   })
   
   createWindow()
+})
+
+// A fixed independent encrypted file: project export/move does not carry API credentials.
+const credentials = createCredentialStore(path.join(app.getPath('userData'), 'api-config.enc'), safeStorage, process.platform)
+trustedHandle('api-config-read', () => credentials.read())
+trustedHandle('api-config-write', (_event, value: string) => credentials.write(value))
+trustedHandle('api-config-remove', () => credentials.remove())
+
+
+// No executable paths, output paths, command arguments or API headers cross film IPC.
+let filmRenderManager: FilmRenderManager | undefined
+function getFilmRenderManager() {
+  if (filmRenderManager) return filmRenderManager
+  const toolRoot = app.isPackaged
+    ? path.join(process.resourcesPath, 'ffmpeg')
+    : path.join(process.env.APP_ROOT!, '.cache', 'ffmpeg', `${process.platform}-${process.arch}`)
+  const extension = process.platform === 'win32' ? '.exe' : ''
+  filmRenderManager = new FilmRenderManager({
+    mediaRoot: getMediaRoot,
+    tools: { ffmpeg: path.join(toolRoot, `ffmpeg${extension}`), ffprobe: path.join(toolRoot, `ffprobe${extension}`) },
+    chooseOutput: async (request: FilmRenderRequest) => {
+      const name = request.projectName.replace(/[\\/:*?"<>|\r\n]/g, '-').trim().slice(0, 80) || 'Film'
+      const result = await dialog.showSaveDialog(win!, { title: '保存 YITOKEN 整片 MP4', defaultPath: `YITOKEN-${name}.mp4`, filters: [{ name: 'MP4 Video', extensions: ['mp4'] }], properties: ['createDirectory', 'showOverwriteConfirmation'] })
+      return result.canceled || !result.filePath ? null : result.filePath
+    },
+    reveal: file => shell.showItemInFolder(file),
+  })
+  return filmRenderManager
+}
+trustedHandle('film-render-start', (_event, request: FilmRenderRequest) => {
+  if (activeStorageMutations > 0) return { success: false, error: '存储操作正在进行，请等待迁移、导入或缓存操作完成后再开始整片合成。' }
+  return getFilmRenderManager().start(request)
+})
+trustedHandle('film-render-status', (_event, jobId: string) => getFilmRenderManager().status(jobId))
+trustedHandle('film-render-cancel', (_event, jobId: string) => getFilmRenderManager().cancel(jobId))
+trustedHandle('film-render-reveal', (_event, jobId: string) => getFilmRenderManager().reveal(jobId))
+let filmShutdownComplete = false
+app.on('before-quit', event => {
+  if (!filmRenderManager || filmShutdownComplete) return
+  event.preventDefault()
+  filmRenderManager.shutdown().finally(() => { filmShutdownComplete = true; app.quit() })
 })

@@ -2,25 +2,41 @@
 // Licensed under AGPL-3.0-or-later. See LICENSE for details.
 // Commercial licensing available. See COMMERCIAL_LICENSE.md.
 import { ipcRenderer, contextBridge } from 'electron'
+import { isAllowedIpcChannel } from './ipc-policy'
+import type { FilmRenderRequest } from '../src/types/film-render'
 
-// --------- Expose some API to the Renderer process ---------
+// No universal bridge: only existing app operations may cross this boundary.
+const listeners = new Map<Function, (...args: any[]) => void>()
+function requireChannel(operation: 'on' | 'off' | 'send' | 'invoke', channel: string) {
+  if (!isAllowedIpcChannel(operation, channel)) throw new Error('IPC channel is not allowed')
+}
 contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(...args: Parameters<typeof ipcRenderer.on>) {
-    const [channel, listener] = args
-    return ipcRenderer.on(channel, (event, ...args) => listener(event, ...args))
+  on(channel: string, listener: (event: unknown, ...args: unknown[]) => void) {
+    requireChannel('on', channel)
+    const previous = listeners.get(listener)
+    if (previous) ipcRenderer.off(channel, previous)
+    const wrapped = (_event: unknown, ...args: unknown[]) => listener(undefined, ...args)
+    listeners.set(listener, wrapped)
+    ipcRenderer.on(channel, wrapped)
   },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.off(channel, ...omit)
+  off(channel: string, listener: (event: unknown, ...args: unknown[]) => void) {
+    requireChannel('off', channel)
+    const wrapped = listeners.get(listener)
+    if (wrapped) { ipcRenderer.off(channel, wrapped); listeners.delete(listener) }
   },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
+  send(channel: string, ...args: unknown[]) {
+    requireChannel('send', channel)
+    ipcRenderer.send(channel, ...args)
   },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
+  invoke(channel: string, ...args: unknown[]) {
+    requireChannel('invoke', channel)
+    return ipcRenderer.invoke(channel, ...args)
   },
+})
+contextBridge.exposeInMainWorld('secureApiConfig', {
+  read: () => ipcRenderer.invoke('api-config-read'),
+  write: (value: string) => ipcRenderer.invoke('api-config-write', value),
+  remove: () => ipcRenderer.invoke('api-config-remove'),
 })
 
 // Image storage API
@@ -112,3 +128,10 @@ contextBridge.exposeInMainWorld('imageHostUploader', {
   }) => ipcRenderer.invoke('image-host-upload', payload),
 })
 
+
+contextBridge.exposeInMainWorld('filmRenderer', {
+  start: (request: FilmRenderRequest) => ipcRenderer.invoke('film-render-start', request),
+  status: (jobId: string) => ipcRenderer.invoke('film-render-status', jobId),
+  cancel: (jobId: string) => ipcRenderer.invoke('film-render-cancel', jobId),
+  reveal: (jobId: string) => ipcRenderer.invoke('film-render-reveal', jobId),
+})

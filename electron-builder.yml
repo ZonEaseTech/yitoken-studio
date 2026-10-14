@@ -1,5 +1,5 @@
-appId: com.manju2026.moyin-creator
-productName: 魔因漫创
+appId: cn.com.yitoken.studio
+productName: YITOKEN Studio
 directories:
   buildResources: build
   output: release/build
@@ -12,7 +12,30 @@ files:
   - "!node_modules/sharp/**"
   - "!node_modules/@img/**"
 
+# Supplied only by scripts/build-desktop.mjs after target/source/hash validation.
 extraResources:
+  - from: ${env.YITOKEN_VERIFIED_MEDIA_DIR}
+    to: ffmpeg
+    filter:
+      - "ffmpeg"
+      - "ffprobe"
+      - "ffmpeg.exe"
+      - "ffprobe.exe"
+      - "FFMPEG-LICENSE.txt"
+      - "X264-LICENSE.txt"
+      - "MEDIA-PROVENANCE.json"
+  - from: ${env.YITOKEN_VERIFIED_THIRD_PARTY_DIR}
+    to: third_party
+    filter:
+      - "**/*"
+  - from: ${env.YITOKEN_THIRD_PARTY_NOTICES}
+    to: THIRD-PARTY-NOTICES.txt
+  - from: ${env.YITOKEN_DESKTOP_RESOURCE_PROVENANCE}
+    to: DESKTOP-RESOURCE-PROVENANCE.json
+  - from: LICENSE
+    to: LICENSE-AGPL-3.0.txt
+  - from: NOTICE.md
+    to: NOTICE.md
   - from: demo-data
     to: demo-data
     filter:
@@ -26,6 +49,7 @@ asarUnpack:
 icon: build/icon.ico
 
 mac:
+  identity: null # Unsigned preview builds; signing requires a separate release process.
   icon: build/icon.icns
   artifactName: ${name}-${version}-${arch}-mac.${ext}
   target:
@@ -33,7 +57,7 @@ mac:
     - zip
 
 win:
-  executableName: moyin-creator
+  executableName: yitoken-studio
   icon: build/icon.ico
   forceCodeSigning: false
   target:
@@ -44,7 +68,7 @@ win:
 # NSIS 安装包配置
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: 魔因漫创
+  shortcutName: YITOKEN Studio
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
   createStartMenuShortcut: true
@@ -53,3 +77,9 @@ nsis:
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
   installerHeaderIcon: build/icon.ico
+
+linux:
+  icon: build/icon.png
+  target:
+    - AppImage
+  category: AudioVideo

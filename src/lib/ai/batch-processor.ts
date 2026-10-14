@@ -15,6 +15,7 @@
  *   - 进度回调
  */
 
+import { YitokenSubmissionError } from '@/lib/ai/yitoken-client';
 import type { AIFeature } from '@/stores/api-config-store';
 import { useAPIConfigStore } from '@/stores/api-config-store';
 import { callFeatureAPI, type CallFeatureAPIOptions } from '@/lib/ai/feature-router';
@@ -297,21 +298,27 @@ async function executeBatchWithRetry<TItem, TResult>(
   apiOptions?: CallFeatureAPIOptions,
 ): Promise<Map<string, TResult>> {
   let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= MAX_BATCH_RETRIES; attempt++) {
+  const yitokenBatch = apiOptions?.configOverride?.platform === 'yitoken'
+    || useAPIConfigStore.getState().getProvidersForFeature(feature).some(({ provider }) => provider.platform === 'yitoken');
+  const maxRetries = yitokenBatch ? 0 : MAX_BATCH_RETRIES;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    let responseReceived = false;
     try {
       const { system, user } = buildPrompts(batch);
       const raw = await callFeatureAPI(feature, system, user, apiOptions);
+      responseReceived = true;
       return parseResult(raw, batch);
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
+      if (yitokenBatch && responseReceived) throw new YitokenSubmissionError(`批次响应处理失败，可能已计费；不会重复请求：${lastError.message}`);
+      if ((lastError as { retrySafe?: boolean }).retrySafe === false) throw lastError;
 
       // TOKEN_BUDGET_EXCEEDED 不重试（输入太大，重试也没用）
       if ((lastError as any).code === 'TOKEN_BUDGET_EXCEEDED') {
         throw lastError;
       }
 
-      if (attempt < MAX_BATCH_RETRIES) {
+      if (attempt < maxRetries) {
         const delay = RETRY_BASE_DELAY * Math.pow(2, attempt);
         console.warn(
           `[BatchProcessor] 批次执行失败 (attempt ${attempt + 1}/${MAX_BATCH_RETRIES + 1}), ` +

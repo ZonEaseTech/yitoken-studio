@@ -9,6 +9,7 @@
  * Based on AionUi's ModelModalContent pattern
  */
 
+import { YITOKEN_DEFAULT_MODELS, syncYitokenModels } from "@/lib/ai/yitoken-client";
 import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   isVisibleImageHostProvider,
@@ -22,6 +23,7 @@ import { useProjectStore } from "@/stores/project-store";
 import { useCharacterLibraryStore } from "@/stores/character-library-store";
 import { useSceneStore } from "@/stores/scene-store";
 import { useMediaStore } from "@/stores/media-store";
+import { isFilmRenderActive, useFilmRenderStore } from "@/stores/film-render-store";
 import { getApiKeyCount, parseApiKeys, maskApiKey } from "@/lib/api-key-manager";
 import { AddProviderDialog, EditProviderDialog, FeatureBindingPanel } from "@/components/api-manager";
 import { AddImageHostDialog } from "@/components/image-host-manager/AddImageHostDialog";
@@ -86,10 +88,17 @@ import packageJson from "../../../package.json";
 
 // Platform icon mapping
 const PLATFORM_ICONS: Record<string, React.ReactNode> = {
-  memefast: <Zap className="h-5 w-5" />,
+  yitoken: <Zap className="h-5 w-5" />,
   runninghub: <Image className="h-5 w-5" />,
   custom: <Settings className="h-5 w-5" />,
 };
+
+function storageChangeBlockedByFilmRender(): boolean {
+  const { starting, job } = useFilmRenderStore.getState();
+  if (!starting && !isFilmRenderActive(job)) return false;
+  toast.error("整片合成正在准备或运行，请等待完成，或先取消并确认任务已停止，再修改存储或清理缓存。");
+  return true;
+}
 
 export function SettingsPanel() {
   const {
@@ -148,66 +157,6 @@ export function SettingsPanel() {
     () => imageHostProviders.filter(isVisibleImageHostProvider),
     [imageHostProviders],
   );
-
-  // ====== Memefast 默认绑定自动补全 ======
-  // 覆盖场景：
-  //  1. 旧版本升级后已有 key 但 featureBindings 为空
-  //  2. 旧版本留下无效绑定（模型名错、provider ID 变更等）
-  //  3. 用户编辑填 key 后页面刷新
-  useEffect(() => {
-    const mf = providers.find(p => p.platform === 'memefast');
-    if (!mf || parseApiKeys(mf.apiKey).length === 0) return;
-
-    const pid = mf.id;
-    const models = mf.model || [];
-    const defaults: Record<string, string> = {
-      script_analysis: `${pid}:deepseek-v3.2`,
-      character_generation: `${pid}:gemini-3-pro-image-preview`,
-      video_generation: `${pid}:doubao-seedance-1-5-pro-251215`,
-      image_understanding: `${pid}:gemini-2.5-flash`,
-    };
-
-    // 检查绑定是否有效
-    const isBindingValid = (b: string): boolean => {
-      const idx = b.indexOf(':');
-      if (idx <= 0) return false;
-      const ref = b.slice(0, idx);
-      const model = b.slice(idx + 1);
-      const p = providers.find(pv => pv.id === ref || pv.platform === ref);
-      if (!p || parseApiKeys(p.apiKey).length === 0) return false;
-      // 模型列表为空时（尚未同步）暂时信任绑定
-      if (p.model.length === 0) return true;
-      return p.model.includes(model);
-    };
-
-    let changed = false;
-    for (const [feature, binding] of Object.entries(defaults)) {
-      const cur = getFeatureBindings(feature as AIFeature);
-
-      // 自愈：deepseek-v3 → deepseek-v3.2（在校验之前先迁移）
-      if (feature === 'script_analysis' && cur && cur.some(b => b.endsWith(':deepseek-v3'))) {
-        const migrated = cur.map(b => {
-          if (!b.endsWith(':deepseek-v3')) return b;
-          const i = b.indexOf(':');
-          return i > 0 ? `${b.slice(0, i)}:deepseek-v3.2` : binding;
-        });
-        setFeatureBindings(feature as AIFeature, [...new Set(migrated)]);
-        changed = true;
-        continue;
-      }
-
-      // 为空 或 全部无效 → 重新设置默认值
-      const needsDefault = !cur || cur.length === 0 || !cur.some(isBindingValid);
-      if (needsDefault) {
-        setFeatureBindings(feature as AIFeature, [binding]);
-        changed = true;
-      }
-    }
-    if (changed) {
-      console.log('[SettingsPanel] Auto-applied memefast default bindings');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,71 +236,25 @@ export function SettingsPanel() {
     setTestResults((prev) => ({ ...prev, [provider.id]: null }));
 
     try {
-      let response: Response;
-      const apiKey = keys[0]; // Use first key for test
-      const normalizedBaseUrl = provider.baseUrl?.replace(/\/+$/, "");
-      const buildEndpoint = (root: string, path: string) => {
-        const normalized = root.replace(/\/+$/, "");
-        return /\/v\d+$/.test(normalized) ? `${normalized}/${path}` : `${normalized}/v1/${path}`;
-      };
-
-      if (provider.platform === "runninghub") {
-        if (!normalizedBaseUrl) {
-          toast.error("请先配置 Base URL");
-          setTestingProvider(null);
-          return;
-        }
-        response = await fetch(`${normalizedBaseUrl}/query`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            taskId: "test-connection-check",
-          }),
-        });
-        
-        // For RunningHub, 400/404 means auth is OK (task doesn't exist)
-        if (response.status === 400 || response.status === 404) {
-          setTestResults((prev) => ({ ...prev, [provider.id]: true }));
-          toast.success("连接测试成功");
-          setTestingProvider(null);
-          return;
-        }
-      } else if (normalizedBaseUrl && provider.model?.length) {
-        const endpoint = buildEndpoint(normalizedBaseUrl, "chat/completions");
-        const model = provider.model[0];
-        response = await fetch(endpoint, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [{ role: "user", content: "Hi" }],
-            max_tokens: 5,
-          }),
-        });
-      } else {
-        // For providers without chat endpoint info, just mark as configured
-        setTestResults((prev) => ({ ...prev, [provider.id]: true }));
-        toast.success(`${provider.name} 已配置`);
-        setTestingProvider(null);
+      // Read-only model listing: connection test must not generate paid content.
+      if (provider.platform === 'runninghub') {
+        setTestResults(prev => ({ ...prev, [provider.id]: false }));
+        toast.info('RunningHub 不支持本版免费模型列表测试；请使用供应商后台核验');
         return;
       }
-
-      const success = response.ok;
-      setTestResults((prev) => ({ ...prev, [provider.id]: success }));
-
-      if (success) {
-        toast.success("连接测试成功");
+      let success: boolean;
+      if (provider.platform === 'yitoken') {
+        await syncYitokenModels(provider.baseUrl, keys[0]);
+        success = true;
       } else {
-        const errorData = await response.text();
-        console.error("API test error:", response.status, errorData);
-        toast.error(`连接测试失败 (${response.status})`);
+        const base = provider.baseUrl.replace(/\/+$/, '');
+        const url = /\/v\d+$/.test(base) ? `${base}/models` : `${base}/v1/models`;
+        const response = await fetch(url, { headers: { Authorization: `Bearer ${keys[0]}` } });
+        success = response.ok;
       }
+      setTestResults(prev => ({ ...prev, [provider.id]: success }));
+      if (success) toast.success('模型列表连接成功（未执行付费生成）');
+      else toast.error('模型列表连接失败，请检查 Key 权限和地址');
     } catch (error) {
       console.error("Connection test error:", error);
       setTestResults((prev) => ({ ...prev, [provider.id]: false }));
@@ -447,12 +350,14 @@ export function SettingsPanel() {
 
   // Unified storage handlers
   const handleSelectStoragePath = async () => {
+    if (storageChangeBlockedByFilmRender()) return;
     if (!window.storageManager) {
       toast.error("请在桌面应用中使用此功能");
       return;
     }
     const dir = await window.storageManager.selectDirectory();
     if (!dir) return;
+    if (storageChangeBlockedByFilmRender()) return;
     const result = await window.storageManager.moveData(dir);
     if (result.success) {
       setStoragePaths({ basePath: result.path || dir });
@@ -478,7 +383,7 @@ export function SettingsPanel() {
       }
       
       toast.success("存储位置已更新，正在刷新...");
-      setTimeout(() => window.location.reload(), 500);
+      setTimeout(() => { if (!storageChangeBlockedByFilmRender()) window.location.reload(); }, 500);
     } else {
       toast.error(`移动失败: ${result.error || "未知错误"}`);
     }
@@ -497,9 +402,11 @@ export function SettingsPanel() {
   };
 
   const handleImportData = async () => {
+    if (storageChangeBlockedByFilmRender()) return;
     if (!window.storageManager) return;
     const dir = await window.storageManager.selectDirectory();
     if (!dir) return;
+    if (storageChangeBlockedByFilmRender()) return;
     if (!confirm("导入将覆盖当前数据，是否继续？")) return;
     const result = await window.storageManager.importData(dir);
     if (result.success) {
@@ -525,22 +432,25 @@ export function SettingsPanel() {
       
       toast.success("数据已导入，正在刷新...");
       // 延迟刷新页面以确保缓存清理完成
-      setTimeout(() => window.location.reload(), 500);
+      setTimeout(() => { if (!storageChangeBlockedByFilmRender()) window.location.reload(); }, 500);
     } else {
       toast.error(`导入失败: ${result.error || "未知错误"}`);
     }
   };
 
   const handleLinkData = async () => {
+    if (storageChangeBlockedByFilmRender()) return;
     if (!window.storageManager) {
       toast.error("请在桌面应用中使用此功能");
       return;
     }
     const dir = await window.storageManager.selectDirectory();
     if (!dir) return;
+    if (storageChangeBlockedByFilmRender()) return;
     
     // Validate the directory first
     const validation = await window.storageManager.validateDataDir(dir);
+    if (storageChangeBlockedByFilmRender()) return;
     if (!validation.valid) {
       toast.error(validation.error || "无效的数据目录");
       return;
@@ -575,13 +485,14 @@ export function SettingsPanel() {
       }
       
       toast.success("已指向数据目录，正在刷新...");
-      setTimeout(() => window.location.reload(), 500);
+      setTimeout(() => { if (!storageChangeBlockedByFilmRender()) window.location.reload(); }, 500);
     } else {
       toast.error(`操作失败: ${result.error || "未知错误"}`);
     }
   };
 
   const handleClearCache = async () => {
+    if (storageChangeBlockedByFilmRender()) return;
     if (!window.storageManager) return;
     setIsClearingCache(true);
     try {
@@ -702,14 +613,14 @@ export function SettingsPanel() {
             <div>
               <h3 className="font-medium text-foreground text-sm">安全说明</h3>
               <p className="text-xs text-muted-foreground mt-1">
-                所有 API Key 仅存储在您的浏览器本地存储中，不会上传到任何服务器。支持多 Key 轮换，失败时自动切换。
+                请使用您自己的 Key，应用不内置共享 Key。桌面版通过系统加密保存配置；加密不可用时仅当前会话有效。调用时 Key 会发送给您配置的 API 服务器，提示词与素材会发送给该服务。模型列表测试不生成内容；正式生成按 YITOKEN 后台计费，网络异常不会自动重复提交。首版仅开放已适配协议的模型，不支持图片理解和未验证的高级 / 异步图片模式。
               </p>
             </div>
           </div>
 
-          {/* MemeFast 购买引导 */}
+          {/* User-owned YITOKEN account and API key */}
           <a
-            href="https://memefast.top"
+            href="https://yitoken.com.cn/keys"
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-3 p-4 bg-gradient-to-r from-orange-500/5 to-primary/5 border border-orange-500/20 rounded-lg hover:border-orange-500/40 transition-colors group"
@@ -719,13 +630,13 @@ export function SettingsPanel() {
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="font-medium text-foreground text-sm flex items-center gap-2">
-                魔因API
+                YITOKEN
                 <span className="text-[10px] px-1.5 py-0.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded">
                   推荐
                 </span>
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">
-                543+ AI 模型一站式接入，支持 GPT / Claude / Gemini / DeepSeek / Sora 等
+                先在官网注册 / 登录，自行创建令牌；充值与价格以官网后台为准。当前支持对话、Seedream 图片、Seedance 视频。
               </p>
             </div>
             <span className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium text-primary group-hover:underline">
@@ -751,16 +662,16 @@ export function SettingsPanel() {
                   尚未配置任何供应商
                 </h3>
                 <p className="text-sm text-muted-foreground mb-2">
-                  推荐使用魔因API，支持 543+ 模型一站式接入
+                  推荐使用 YITOKEN，自行获取 Key 后同步可用模型
                 </p>
                 <a
-                  href="https://memefast.top"
+                  href="https://yitoken.com.cn"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline mb-4"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
-                  前往魔因API获取 Key
+                  前往YITOKEN获取 Key
                 </a>
                 <Button onClick={() => setAddDialogOpen(true)}>
                   <Plus className="h-4 w-4 mr-1" />
@@ -809,7 +720,7 @@ export function SettingsPanel() {
                               <div className="text-left">
                                 <h4 className="font-medium text-foreground flex items-center gap-2">
                                   {provider.name}
-                                  {provider.platform === 'memefast' && (
+                                  {provider.platform === 'yitoken' && (
                                     <span className="text-[10px] px-1.5 py-0.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 rounded font-normal">
                                       推荐
                                     </span>
@@ -881,7 +792,7 @@ export function SettingsPanel() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8"
-                                  title="测试连接"
+                                  title="仅测试模型列表，不生成付费内容"
                                   onClick={() => testConnection(provider)}
                                   disabled={!configured || isTesting}
                                 >
@@ -947,17 +858,17 @@ export function SettingsPanel() {
                           </div>
                         </CollapsibleTrigger>
 
-                        {/* MemeFast 购买引导 */}
-                        {provider.platform === 'memefast' && !configured && (
+                        {/* User-owned YITOKEN account and API key */}
+                        {provider.platform === 'yitoken' && !configured && (
                           <div className="px-4 pb-2">
                             <a
-                              href="https://memefast.top"
+                              href="https://yitoken.com.cn"
                               target="_blank"
                               rel="noopener noreferrer"
                               className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
                             >
                               <ExternalLink className="h-3 w-3" />
-                              前往魔因API获取 Key →
+                              前往YITOKEN获取 Key →
                             </a>
                           </div>
                         )}
@@ -1306,8 +1217,7 @@ export function SettingsPanel() {
                     启用多个图床会按顺序轮流使用，失败自动切换。
                   </p>
                   <p className="text-sm">
-                    默认已启用 SCDN 图床，不需要填写KEY；
-                    ImgBB 默认保持关闭，如需使用请手动开启并自行测试可用性。
+                    默认关闭所有第三方图床。开启即授权将参考素材上传到该供应商；请先配置您信任的存储并了解隐私政策。未授权上传时，依赖公开素材 URL 的模式会明确拒绝，不会偷偷使用游客图床。
                   </p>
                 </div>
               </div>
@@ -1596,57 +1506,36 @@ export function SettingsPanel() {
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
         onSubmit={(providerData) => {
-          // 魔因API：已存在时合并 Key，不重复创建
-          const existingMemefast = providerData.platform === 'memefast'
-            ? providers.find((p) => p.platform === 'memefast')
+          // YITOKEN：已存在时合并 Key，不重复创建
+          const existingYitoken = providerData.platform === 'yitoken'
+            ? providers.find((p) => p.platform === 'yitoken')
             : null;
           let provider: IProvider;
-          if (existingMemefast) {
-            const oldKeys = parseApiKeys(existingMemefast.apiKey);
+          if (existingYitoken) {
+            const oldKeys = parseApiKeys(existingYitoken.apiKey);
             const newKeys = parseApiKeys(providerData.apiKey);
             const merged = Array.from(new Set([...oldKeys, ...newKeys]));
-            updateProvider({ ...existingMemefast, apiKey: merged.join(',') });
-            provider = existingMemefast;
+            updateProvider({ ...existingYitoken, apiKey: merged.join(',') });
+            provider = existingYitoken;
           } else {
             provider = addProvider(providerData);
           }
-          // 如果添加的是 memefast 供应商，自动设置默认服务映射（仅在对应服务尚未配置时）
-          if (providerData.platform === 'memefast') {
+          // 如果添加的是 YITOKEN 供应商，自动设置默认服务映射（仅在对应服务尚未配置时）
+          if (providerData.platform === 'yitoken') {
             // 使用 provider.id（而非 platform 字符串）避免多供应商时的歧义解析
             const pid = provider.id;
-            const MEMEFAST_DEFAULT_BINDINGS: Record<string, string> = {
-              // NOTE: MemeFast 端点已升级，旧的 deepseek-v3 已不在列表中，改用 deepseek-v3.2
-              script_analysis: `${pid}:deepseek-v3.2`,
-              character_generation: `${pid}:gemini-3-pro-image-preview`,
-              video_generation: `${pid}:doubao-seedance-1-5-pro-251215`,
-              image_understanding: `${pid}:gemini-2.5-flash`,
-            };
-            for (const [feature, binding] of Object.entries(MEMEFAST_DEFAULT_BINDINGS)) {
+            const YITOKEN_BINDINGS: Record<string, string> = Object.fromEntries(Object.entries(YITOKEN_DEFAULT_MODELS).filter(([, model]) => provider.model.includes(model)).map(([feature, model]) => [feature, `${pid}:${model}`]));
+            for (const [feature, binding] of Object.entries(YITOKEN_BINDINGS)) {
               const current = getFeatureBindings(feature as AIFeature);
               // 仅在未配置时设置默认值，避免覆盖用户手动选择
               if (!current || current.length === 0) {
                 setFeatureBindings(feature as AIFeature, [binding]);
                 continue;
               }
-              // 自愈：旧默认 deepseek-v3 -> deepseek-v3.2（尽量不破坏多选配置）
-              if (feature === 'script_analysis') {
-                const hasOld = current.some((b) => b.endsWith(':deepseek-v3'));
-                if (hasOld) {
-                  const migrated = current.map((b) => {
-                    if (!b.endsWith(':deepseek-v3')) return b;
-                    const idx = b.indexOf(':');
-                    if (idx <= 0) return binding;
-                    const prefix = b.slice(0, idx);
-                    return `${prefix}:deepseek-v3.2`;
-                  });
-                  const deduped = Array.from(new Set(migrated));
-                  setFeatureBindings(feature as AIFeature, deduped);
-                }
-              }
             }
           }
           // 添加后自动同步模型列表和端点元数据
-          const finalProviderId = existingMemefast ? existingMemefast.id : provider.id;
+          const finalProviderId = existingYitoken ? existingYitoken.id : provider.id;
           if (parseApiKeys(providerData.apiKey).length > 0) {
             setSyncingProvider(finalProviderId);
             syncProviderModels(finalProviderId).then(result => {
@@ -1669,37 +1558,16 @@ export function SettingsPanel() {
         onSave={(provider) => {
           updateProvider(provider);
 
-          // 编辑 memefast 时也自动设置默认服务映射：初始状态会预置一个空 key 的 memefast，
+          // 编辑 YITOKEN 时补全尚未配置的默认服务映射，
           // 用户通常是“编辑填 key”，如果不在这里补默认映射，会导致服务映射一直是 0/6。
-          if (provider.platform === 'memefast' && parseApiKeys(provider.apiKey).length > 0) {
+          if (provider.platform === 'yitoken' && parseApiKeys(provider.apiKey).length > 0) {
             const pid = provider.id;
-            const MEMEFAST_DEFAULT_BINDINGS: Record<string, string> = {
-              // NOTE: MemeFast 端点已升级，旧的 deepseek-v3 已不在列表中，改用 deepseek-v3.2
-              script_analysis: `${pid}:deepseek-v3.2`,
-              character_generation: `${pid}:gemini-3-pro-image-preview`,
-              video_generation: `${pid}:doubao-seedance-1-5-pro-251215`,
-              image_understanding: `${pid}:gemini-2.5-flash`,
-            };
-            for (const [feature, binding] of Object.entries(MEMEFAST_DEFAULT_BINDINGS)) {
+            const YITOKEN_BINDINGS: Record<string, string> = Object.fromEntries(Object.entries(YITOKEN_DEFAULT_MODELS).filter(([, model]) => provider.model.includes(model)).map(([feature, model]) => [feature, `${pid}:${model}`]));
+            for (const [feature, binding] of Object.entries(YITOKEN_BINDINGS)) {
               const current = getFeatureBindings(feature as AIFeature);
               if (!current || current.length === 0) {
                 setFeatureBindings(feature as AIFeature, [binding]);
                 continue;
-              }
-              // 自愈：旧默认 deepseek-v3 -> deepseek-v3.2
-              if (feature === 'script_analysis') {
-                const hasOld = current.some((b) => b.endsWith(':deepseek-v3'));
-                if (hasOld) {
-                  const migrated = current.map((b) => {
-                    if (!b.endsWith(':deepseek-v3')) return b;
-                    const idx = b.indexOf(':');
-                    if (idx <= 0) return binding;
-                    const prefix = b.slice(0, idx);
-                    return `${prefix}:deepseek-v3.2`;
-                  });
-                  const deduped = Array.from(new Set(migrated));
-                  setFeatureBindings(feature as AIFeature, deduped);
-                }
               }
             }
           }

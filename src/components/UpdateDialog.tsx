@@ -4,7 +4,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { ExternalLink, Download } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -90,42 +90,14 @@ export function UpdateDialog({
               <div>
                 <p className="text-sm font-medium text-foreground">下载方式</p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  可任选 GitHub 或百度网盘下载最新安装包。
+                  请到 YITOKEN 官网查看适用平台、安装包与同版本 AGPL 源码。本应用不会自动下载或安装更新。
                 </p>
               </div>
-              {updateInfo.baiduCode && (
-                <div className="text-xs text-muted-foreground">
-                  提取码：
-                  <span className="ml-1 font-mono text-foreground">{updateInfo.baiduCode}</span>
-                </div>
-              )}
             </div>
-
-            {(!updateInfo.githubUrl && !updateInfo.baiduUrl) && (
-              <p className="text-xs text-destructive">当前版本清单未提供下载链接。</p>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-2">
-              {updateInfo.githubUrl && (
-                <Button
-                  className="flex-1"
-                  onClick={() => void handleOpenLink(updateInfo.githubUrl!)}
-                >
-                  <ExternalLink className="h-4 w-4 mr-2" />
-                  GitHub 下载
-                </Button>
-              )}
-              {updateInfo.baiduUrl && (
-                <Button
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => void handleOpenLink(updateInfo.baiduUrl!)}
-                >
-                  <Download className="h-4 w-4 mr-2" />
-                  百度网盘下载
-                </Button>
-              )}
-            </div>
+            <Button className="w-full" onClick={() => void handleOpenLink('https://yitoken.com.cn/downloads/')}>
+              <ExternalLink className="h-4 w-4 mr-2" />
+              官网下载 / 同版本源码
+            </Button>
           </div>
         </div>
 

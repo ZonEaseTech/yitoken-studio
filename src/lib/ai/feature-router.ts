@@ -16,6 +16,7 @@
  *   // Use config.apiKey and config.provider in API call
  */
 
+import { supportsYitokenFeature } from '@/lib/ai/yitoken-client';
 import { useAPIConfigStore, type AIFeature, type IProvider, AI_FEATURES } from '@/stores/api-config-store';
 import { parseApiKeys, getProviderKeyManager, ApiKeyManager } from '@/lib/api-key-manager';
 
@@ -34,30 +35,6 @@ export interface FeatureConfig {
 
 // 多模型轮询调度器：记录每个功能的当前索引
 const featureRoundRobinIndex: Map<AIFeature, number> = new Map();
-
-/**
- * Default mapping for features to platforms (fallback when not explicitly bound)
- */
-const FEATURE_PLATFORM_MAP: Partial<Record<AIFeature, string>> = {
-  script_analysis: 'memefast',
-  character_generation: 'memefast',
-  video_generation: 'memefast',
-  image_understanding: 'memefast',
-  chat: 'memefast',
-  freedom_image: 'memefast',
-  freedom_video: 'memefast',
-};
-
-/**
- * 默认模型映射：当供应商未显式绑定模型时，为特定功能提供默认模型
- * 仅在 fallback 路径中使用（用户显式绑定优先）
- */
-const FEATURE_DEFAULT_MODEL: Partial<Record<AIFeature, Record<string, string>>> = {
-  image_understanding: {
-    memefast: 'gemini-3.1-pro-preview', // 魔音API 默认使用 Gemini 3.1 Pro
-  },
-};
-
 
 /**
  * 解析 platform:model 格式
@@ -145,36 +122,6 @@ export function getFeatureConfig(feature: AIFeature): FeatureConfig | null {
   const configs = getAllFeatureConfigs(feature);
   
   if (configs.length === 0) {
-    // Fallback: 尝试使用默认平台映射
-    const store = useAPIConfigStore.getState();
-    const defaultPlatform = FEATURE_PLATFORM_MAP[feature];
-    if (defaultPlatform) {
-      const provider = store.providers.find(p => p.platform === defaultPlatform);
-      if (provider) {
-        const keys = parseApiKeys(provider.apiKey);
-        if (keys.length > 0) {
-          const fallbackModel = FEATURE_DEFAULT_MODEL[feature]?.[provider.platform] || provider.model?.[0] || '';
-          const scopeKey = `${feature}:${fallbackModel || 'default'}`;
-          const keyManager = getProviderKeyManager(provider.id, provider.apiKey, scopeKey);
-          const featureInfo = AI_FEATURES.find(f => f.key === feature);
-          // 优先使用功能默认模型，否则取供应商第一个模型
-          const defaultModel = FEATURE_DEFAULT_MODEL[feature]?.[provider.platform];
-          const model = defaultModel || provider.model?.[0] || '';
-          return {
-            feature,
-            featureName: featureInfo?.name || feature,
-            provider,
-            apiKey: keyManager.getCurrentKey() || keys[0],
-            allApiKeys: keys,
-            keyManager,
-            platform: provider.platform,
-            baseUrl: provider.baseUrl,
-            models: provider.model || [],
-            model,
-          };
-        }
-      }
-    }
     console.warn(`[FeatureRouter] No provider bound for feature: ${feature}`);
     return null;
   }
@@ -265,6 +212,7 @@ export async function callFeatureAPI(
   
   // 从服务映射获取模型
   const model = options?.modelOverride || config.model || config.models?.[0];
+  if (config.platform === 'yitoken' && !supportsYitokenFeature(feature, model, useAPIConfigStore.getState().modelEndpointTypes)) throw new Error('当前功能的 YITOKEN 模型协议尚未适配，请选择兼容模型');
   const baseUrl = config.baseUrl?.replace(/\/+$/, '');
   if (!baseUrl) {
     throw new Error('请先在设置中配置 Base URL');
@@ -283,7 +231,7 @@ export async function callFeatureAPI(
   const disableThinking = options?.disableThinking ?? true;
   return await callChatAPI(systemPrompt, userPrompt, {
     apiKey: config.allApiKeys.join(','),
-    provider: 'openai',
+    provider: config.platform === 'yitoken' ? 'yitoken' : 'openai',
     baseUrl,
     model,
     temperature: options?.temperature,
@@ -297,30 +245,11 @@ export async function callFeatureAPI(
  * Hook-friendly version using Zustand subscription
  */
 export function useFeatureConfig(feature: AIFeature): FeatureConfig | null {
-  const getProviderForFeature = useAPIConfigStore(state => state.getProviderForFeature);
-  const provider = getProviderForFeature(feature);
-  
-  if (!provider) return null;
-  
-  const keys = parseApiKeys(provider.apiKey);
-  if (keys.length === 0) return null;
-  
-  const featureInfo = AI_FEATURES.find(f => f.key === feature);
-  const model = provider.model?.[0] || '';
-  const keyManager = getProviderKeyManager(provider.id, provider.apiKey, `${feature}:${model || 'default'}`);
-  
-  return {
-    feature,
-    featureName: featureInfo?.name || feature,
-    provider,
-    apiKey: keyManager.getCurrentKey() || keys[0],
-    allApiKeys: keys,
-    keyManager,
-    platform: provider.platform,
-    baseUrl: provider.baseUrl,
-    models: provider.model || [],
-    model,
-  };
+  // Subscribe to stable references, then read the same validated binding used by requests.
+  useAPIConfigStore(state => state.providers);
+  useAPIConfigStore(state => state.featureBindings);
+  useAPIConfigStore(state => state.modelEndpointTypes);
+  return getAllFeatureConfigs(feature)[0] || null;
 }
 
 /**

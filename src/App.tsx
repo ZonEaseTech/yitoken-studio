@@ -3,11 +3,13 @@
 // Commercial licensing available. See COMMERCIAL_LICENSE.md.
 import { useEffect, useState } from "react";
 import { Layout } from "@/components/Layout";
+import { FilmRenderMonitor } from "@/components/FilmRenderMonitor";
 import { Toaster } from "@/components/ui/sonner";
 import { UpdateDialog } from "@/components/UpdateDialog";
 import { useThemeStore } from "@/stores/theme-store";
 import { useAPIConfigStore } from "@/stores/api-config-store";
 import { useAppSettingsStore } from "@/stores/app-settings-store";
+import { useSimpleTimelineStore } from "@/stores/simple-timeline-store";
 import { parseApiKeys } from "@/lib/api-key-manager";
 import { Loader2 } from "lucide-react";
 import { migrateToProjectStorage, recoverFromLegacy } from "@/lib/storage-migration";
@@ -27,8 +29,13 @@ function App() {
     (async () => {
       try {
         await useAppSettingsStore.persist.rehydrate();
+        await useAPIConfigStore.persist.rehydrate();
         await migrateToProjectStorage();
         await recoverFromLegacy();
+        // Stores can hydrate before migration creates the project-owned file.
+        // Reload it before revealing the editor so an empty startup snapshot
+        // cannot overwrite the legacy timeline on the user's first edit.
+        await useSimpleTimelineStore.persist.rehydrate();
       } catch (err) {
         console.error('[App] Migration/recovery error:', err);
       } finally {
@@ -46,7 +53,7 @@ function App() {
       const { providers, syncProviderModels } = useAPIConfigStore.getState();
       const configuredProviders = providers
         .filter((p) => parseApiKeys(p.apiKey).length > 0)
-        .sort((a, b) => Number(b.platform === 'memefast') - Number(a.platform === 'memefast'));
+        .sort((a, b) => Number(b.platform === 'yitoken') - Number(a.platform === 'yitoken'));
 
       for (const p of configuredProviders) {
         if (cancelled) return;
@@ -132,6 +139,7 @@ function App() {
   return (
     <div className="h-screen w-screen overflow-hidden">
       <Layout />
+      <FilmRenderMonitor />
       <UpdateDialog
         open={updateDialogOpen}
         onOpenChange={setUpdateDialogOpen}

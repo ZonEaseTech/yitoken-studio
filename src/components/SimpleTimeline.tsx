@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { useProjectStore } from "@/stores/project-store";
 import { usePreviewStore } from "@/stores/preview-store";
 
 interface DragState {
@@ -34,12 +35,17 @@ interface DragState {
 
 export function SimpleTimeline() {
   const {
-    clips,
+    clips: storedClips,
+    boundProjectId,
+    loadError,
     addClip,
     removeClip,
     reorderClips,
     clearTimeline,
   } = useSimpleTimelineStore();
+
+  const activeProjectId = useProjectStore(state => state.activeProjectId);
+  const clips = boundProjectId === activeProjectId && !loadError ? storedClips : [];
 
   const [dragState, setDragState] = useState<DragState>({
     isDragging: false,
@@ -89,11 +95,22 @@ export function SimpleTimeline() {
       e.preventDefault();
       e.stopPropagation();
 
+      const mediaItemData = e.dataTransfer.getData("application/x-media-item");
+      const mediaData = e.dataTransfer.getData("application/json");
+      // Internal clip reorder drops have no external media payload.
+      if (!mediaItemData && !mediaData) return;
+      const timeline = useSimpleTimelineStore.getState();
+      const projectId = useProjectStore.getState().activeProjectId;
+      if (!projectId || timeline.boundProjectId !== projectId || timeline.loadError) {
+        toast.error(timeline.loadError || '当前项目时间线尚未加载，请重新打开项目后再添加视频。');
+        setDragState({ isDragging: false, dragIndex: null, dropIndex: null });
+        return;
+      }
+      const originalIds = new Set(timeline.clips.map(clip => clip.id));
       let handled = false;
 
       // Try application/x-media-item format (from director split scenes)
       try {
-        const mediaItemData = e.dataTransfer.getData("application/x-media-item");
         if (mediaItemData) {
           const data = JSON.parse(mediaItemData);
           // Director split scene format: { id, type, name, url, thumbnailUrl, duration }
@@ -106,7 +123,6 @@ export function SimpleTimeline() {
               thumbnailUrl: data.thumbnailUrl,
               duration: data.duration || 5,
             });
-            toast.success(`已添加: ${data.name || '视频片段'}`);
             handled = true;
           } else if (data.type === "video" && data.id) {
             // Fallback: try to get from media store if URL not provided
@@ -123,7 +139,6 @@ export function SimpleTimeline() {
                   thumbnailUrl: mediaFile.thumbnailUrl,
                   duration: mediaFile.duration || 5,
                 });
-                toast.success(`已添加: ${mediaFile.name || data.name}`);
                 handled = true;
               }
             } catch {
@@ -138,7 +153,7 @@ export function SimpleTimeline() {
       // Try application/json format (from media library)
       if (!handled) {
         try {
-          const data = JSON.parse(e.dataTransfer.getData("application/json"));
+          const data = JSON.parse(mediaData);
           if (data.type === "media" && data.mediaType === "video") {
             addClip({
               mediaId: data.mediaId,
@@ -147,7 +162,6 @@ export function SimpleTimeline() {
               thumbnailUrl: data.thumbnailUrl,
               duration: data.duration || 5,
             });
-            toast.success(`已添加: ${data.name}`);
             handled = true;
           }
         } catch (err) {
@@ -155,6 +169,13 @@ export function SimpleTimeline() {
         }
       }
 
+      const updated = useSimpleTimelineStore.getState();
+      const added = updated.clips.find(clip => !originalIds.has(clip.id));
+      if (handled && added && updated.boundProjectId === projectId && !updated.loadError) {
+        toast.success(`已添加: ${added.name}`);
+      } else {
+        toast.error('未添加视频片段，请检查素材是否存在、视频地址和时长是否有效。');
+      }
       setDragState({ isDragging: false, dragIndex: null, dropIndex: null });
     },
     [addClip]
@@ -206,7 +227,7 @@ export function SimpleTimeline() {
             <ChevronRight className="h-4 w-4" />
           </Button>
           <span className="text-xs text-muted-foreground">
-            时间线 ({clips.length} 个片段)
+            整片顺序 / 预览({clips.length} 个片段)
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -287,7 +308,7 @@ export function SimpleTimeline() {
         {clips.length === 0 ? (
           <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
             <Video className="h-5 w-5 mr-2 opacity-50" />
-            拖拽视频片段到这里
+            {loadError || "拖拽视频到这里并排序；到导出页合成整片 MP4"}
           </div>
         ) : (
           <div

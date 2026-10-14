@@ -1,0 +1,66 @@
+{
+  "packages": {
+    "embla-carousel@8.6.0": {
+      "texts": [
+        {
+          "filename": "embla-carousel-8.6.0-LICENSE.txt",
+          "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+          "sourceUrl": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+          "sourceRevision": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54"
+        }
+      ]
+    },
+    "embla-carousel-react@8.6.0": {
+      "texts": [
+        {
+          "filename": "embla-carousel-8.6.0-LICENSE.txt",
+          "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+          "sourceUrl": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+          "sourceRevision": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54"
+        }
+      ]
+    },
+    "embla-carousel-reactive-utils@8.6.0": {
+      "texts": [
+        {
+          "filename": "embla-carousel-8.6.0-LICENSE.txt",
+          "sha256": "992490064b90ec94c302fe5f29dcc14cb44145857064e46f9ffe6c8f511c1093",
+          "sourceUrl": "https://raw.githubusercontent.com/davidjerleke/embla-carousel/0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54/LICENSE",
+          "sourceRevision": "0fe65834136f1aa35e4c1a4a477e5ccb4bb5ee54"
+        }
+      ]
+    },
+    "victory-vendor@37.3.6": {
+      "texts": [
+        {
+          "filename": "victory-37.3.6-LICENSE.txt",
+          "sha256": "34dee5fd5e5cc756efb5ad4d64652bce719bdf5e900ca5d7538253e737930bc4",
+          "sourceUrl": "https://raw.githubusercontent.com/FormidableLabs/victory/d9d9ca2d5038d6ef9de91f2cef39e6fb2733baa6/LICENSE.txt",
+          "sourceRevision": "d9d9ca2d5038d6ef9de91f2cef39e6fb2733baa6"
+        }
+      ]
+    },
+    "react-remove-scroll-bar@2.3.8": {
+      "exception": "Original package declares MIT but did not ship a complete LICENSE; this is the explicitly approved prerelease-only exception pending legal/author review, not a legal certification.",
+      "packageManifestSha256": "e372f857ce05f266137c65293436b5380fec42ac311e6acb9378ed78b98d75d0",
+      "readmeSha256": "486442209236ffa3893312e508694699a6b8834d30a2f9c083c1f3379983e4f9",
+      "npmIntegrity": "sha512-9r+yi9+mgU33AKcj6IbT9oRCO78WriSj6t/cF8DWBZJ9aOGPOTEDvdUDz1FwKim7QXWwmHqtdHnRJfhAxEG46Q==",
+      "originalLicenseChapter": "# License\nMIT\n",
+      "texts": [
+        {
+          "filename": "react-remove-scroll-bar-2.3.8-original-declaration.txt",
+          "sha256": "8ee8354d5f5f12f11ba596bba67b060d43d3cd677075171404ab5a73703450e8",
+          "sourceUrl": "https://registry.npmjs.org/react-remove-scroll-bar/2.3.8",
+          "kind": "upstream declaration only"
+        },
+        {
+          "filename": "SPDX-MIT-reference.txt",
+          "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+          "sourceUrl": "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/MIT.txt",
+          "sourceRevision": "31ba1a50e5397e00a304dbadc76531740e89ee48",
+          "kind": "SPDX standard reference text, NOT an upstream copyright notice"
+        }
+      ]
+    }
+  }
+}

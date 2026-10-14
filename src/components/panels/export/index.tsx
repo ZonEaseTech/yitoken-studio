@@ -38,6 +38,7 @@ import {
   type ExportProgress,
 } from "@/lib/script/export-service";
 import { toast } from "sonner";
+import { FilmExportPanel } from "./film-export-panel";
 
 export function ExportView() {
   const { activeProject } = useProjectStore();
@@ -46,6 +47,7 @@ export function ExportView() {
 
   // Export state
   const [isExporting, setIsExporting] = useState(false);
+  const [lastExportFailure, setLastExportFailure] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(null);
 
   const shots = scriptProject?.shots || [];
@@ -64,7 +66,7 @@ export function ExportView() {
 
   // Script stats
   const scriptStats = !hasSplitScenes && shots.length > 0 ? getExportStats(shots) : null;
-  const scriptCompleted = scriptStats ? scriptStats.imagesReady + scriptStats.videosReady : 0;
+  const scriptCompleted = scriptStats ? scriptStats.videosReady : 0;
 
   const totalItems = hasSplitScenes ? splitScenes.length : shots.length;
   const completedItems = hasSplitScenes ? directorCompleted : scriptCompleted;
@@ -86,6 +88,7 @@ export function ExportView() {
   const handleExportToFolder = useCallback(async () => {
     if (isExporting) return;
     setIsExporting(true);
+    setLastExportFailure(null);
     setExportProgress({ current: 0, total: 0, message: '准备导出...' });
 
     try {
@@ -100,7 +103,7 @@ export function ExportView() {
           },
           (p) => setExportProgress(p)
         );
-        if (success) toast.success('导出完成！');
+        if (success) toast.success('素材文件夹导出完成（非合并视频）');
       } else if (scriptData) {
         const success = await exportProjectToFolder(
           {
@@ -114,12 +117,13 @@ export function ExportView() {
           },
           (p) => setExportProgress(p)
         );
-        if (success) toast.success('导出完成！');
+        if (success) toast.success('素材文件夹导出完成（非合并视频）');
       } else {
         toast.error('没有可导出的数据');
       }
     } catch (error) {
-      toast.error(`导出失败: ${(error as Error).message}`);
+      setLastExportFailure((error as Error).message);
+      toast.error('素材导出未完成，请查看下方失败文件列表');
     } finally {
       setIsExporting(false);
       setExportProgress(null);
@@ -129,6 +133,7 @@ export function ExportView() {
   const handleDownloadFiles = useCallback(async () => {
     if (isExporting) return;
     setIsExporting(true);
+    setLastExportFailure(null);
     setExportProgress({ current: 0, total: 0, message: '准备下载...' });
 
     try {
@@ -156,10 +161,13 @@ export function ExportView() {
           },
           (p) => setExportProgress(p)
         );
+      } else {
+        throw new Error('没有可下载的素材数据');
       }
-      toast.success('下载完成！');
+      toast.info('素材下载已交给浏览器，请检查下载目录');
     } catch (error) {
-      toast.error(`下载失败: ${(error as Error).message}`);
+      setLastExportFailure((error as Error).message);
+      toast.error('部分素材下载失败，请查看下方失败文件列表');
     } finally {
       setIsExporting(false);
       setExportProgress(null);
@@ -173,15 +181,15 @@ export function ExportView() {
         <div className="flex items-center gap-4">
           <h2 className="text-lg font-bold text-foreground flex items-center gap-3">
             <Film className="w-5 h-5 text-primary" />
-            成片与导出
+            整片与素材导出
             <span className="text-xs text-muted-foreground font-mono font-normal uppercase tracking-wider bg-muted px-2 py-1 rounded">
-              Rendering & Export
+              Film & Assets
             </span>
           </h2>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-muted-foreground font-mono uppercase bg-muted border border-border px-2 py-1 rounded">
-            Status: {progress === 100 ? "READY" : "IN PROGRESS"}
+            视频素材: {progress === 100 ? "已就绪" : "准备中"}
           </span>
         </div>
       </div>
@@ -189,6 +197,7 @@ export function ExportView() {
       <ScrollArea className="flex-1">
         <div className="p-8 md:p-12">
           <div className="max-w-6xl mx-auto space-y-8">
+            <FilmExportPanel project={activeProject} aspectRatio={directorProject?.storyboardConfig.aspectRatio || "9:16"} />
             {/* Main Status Panel */}
             <div className="bg-card border border-border rounded-xl p-8 shadow-2xl relative overflow-hidden">
               {/* Background Decoration */}
@@ -202,7 +211,7 @@ export function ExportView() {
                       {scriptData?.title || activeProject?.name || "未命名项目"}
                     </h3>
                     <span className="px-2 py-0.5 bg-muted border border-border text-muted-foreground text-[10px] rounded uppercase font-mono tracking-wider">
-                      Master Sequence
+                      素材清单
                     </span>
                   </div>
                   <div className="flex items-center gap-6 mt-3">
@@ -240,7 +249,7 @@ export function ExportView() {
                     ) : (
                       <BarChart3 className="w-3 h-3" />
                     )}
-                    Render Status
+                    视频素材就绪
                   </div>
                 </div>
               </div>
@@ -322,6 +331,15 @@ export function ExportView() {
                 )}
               </div>
 
+              <p className="mb-6 text-sm text-muted-foreground">
+                以下按钮只导出图片、视频片段与项目清单，不合并 MP4；需要完整视频请使用上方“合成整片 MP4”。不提供混音、字幕或多轨编辑。
+              </p>
+              {lastExportFailure && (
+                <div role="alert" className="mb-6 rounded-lg border border-destructive/40 p-4 text-sm text-destructive break-words whitespace-pre-wrap">
+                  {lastExportFailure}
+                  <p className="mt-2">已导出的文件会保留。请检查目录并重新导出失败素材；不要将本次导出当成完整素材包。</p>
+                </div>
+              )}
               {/* Export Progress */}
               {exportProgress && (
                 <div className="mb-6 space-y-2">
@@ -353,7 +371,7 @@ export function ExportView() {
                   {isExporting ? (
                     <><Loader2 className="w-4 h-4 mr-2 animate-spin" />导出中...</>
                   ) : (
-                    <><FolderOpen className="w-4 h-4 mr-2" />选择文件夹导出</>
+                    <><FolderOpen className="w-4 h-4 mr-2" />选择文件夹导出素材</>
                   )}
                 </Button>
 
@@ -389,25 +407,25 @@ export function ExportView() {
                 <div>
                   <h4 className="text-sm font-bold text-foreground mb-1">素材下载</h4>
                   <p className="text-[10px] text-muted-foreground">
-                    下载所有已生成的图片和视频素材
+                    逐个下载图片和视频，不生成整片；浏览器可能拦截批量下载
                   </p>
                 </div>
               </div>
-              <div className="p-5 bg-card border border-border rounded-xl hover:border-primary/50 transition-colors group cursor-pointer flex flex-col justify-between h-32">
+              <div className="p-5 bg-card border border-border rounded-xl transition-colors group opacity-50 flex flex-col justify-between h-32">
                 <Share2 className="w-5 h-5 text-muted-foreground group-hover:text-primary mb-4 transition-colors" />
                 <div>
-                  <h4 className="text-sm font-bold text-foreground mb-1">Share Project</h4>
+                  <h4 className="text-sm font-bold text-foreground mb-1">项目分享（暂未实现）</h4>
                   <p className="text-[10px] text-muted-foreground">
-                    Create a view-only link for client review.
+                    初版不提供可公开访问的项目分享链接。
                   </p>
                 </div>
               </div>
-              <div className="p-5 bg-card border border-border rounded-xl hover:border-primary/50 transition-colors group cursor-pointer flex flex-col justify-between h-32">
+              <div className="p-5 bg-card border border-border rounded-xl transition-colors group opacity-50 flex flex-col justify-between h-32">
                 <Clock className="w-5 h-5 text-muted-foreground group-hover:text-primary mb-4 transition-colors" />
                 <div>
-                  <h4 className="text-sm font-bold text-foreground mb-1">Render Logs</h4>
+                  <h4 className="text-sm font-bold text-foreground mb-1">用量报表（暂未实现）</h4>
                   <p className="text-[10px] text-muted-foreground">
-                    View generation history and token usage.
+                    费用请查看平台账单；本机合成不新增生成费。
                   </p>
                 </div>
               </div>

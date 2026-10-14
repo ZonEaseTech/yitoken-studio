@@ -1,182 +1,65 @@
+// YITOKEN changes: verify source-built media and notices before any desktop build.
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { readFile, mkdir, lstat, mkdtemp } from 'node:fs/promises';
+import { dirname, resolve, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { desktopMediaTarget, prepareDesktopResources, verifyPackagedDesktopResources, finalizeDesktopOutput } from './desktop-media.mjs';
 
-const scriptDir = dirname(fileURLToPath(import.meta.url));
-const projectRoot = resolve(scriptDir, '..');
-const releaseDir = resolve(projectRoot, 'release');
-const defaultBuildOutputDir = resolve(releaseDir, 'build');
-const cacheRoot = resolve(projectRoot, '.cache');
-const tempDir = resolve(cacheRoot, 'tmp');
-const electronCacheDir = resolve(cacheRoot, 'electron');
-const electronBuilderCacheDir = resolve(cacheRoot, 'electron-builder');
-const cliArgs = process.argv.slice(2);
-const supportedTargets = ['mac', 'win', 'linux'];
-const supportedArchs = ['x64', 'arm64', 'universal', 'ia32', 'armv7l'];
-const requestedTarget = cliArgs
-  .find((arg) => supportedTargets.includes(arg.replace(/^--/, '')))
-  ?.replace(/^--/, '');
-const requestedArchs = cliArgs
-  .filter((arg) => supportedArchs.includes(arg.replace(/^--/, '')))
-  .map((arg) => arg.replace(/^--/, ''));
-const platformToTarget = {
-  darwin: 'mac',
-  win32: 'win',
-  linux: 'linux',
-};
-const buildTarget = requestedTarget || platformToTarget[process.platform];
-const buildStamp = new Date().toISOString().replace(/[-:.TZ]/g, '');
-const logoPath = resolve(projectRoot, 'logo.png');
-const iconPngPath = resolve(projectRoot, 'build', 'icon.png');
-const iconIcoPath = resolve(projectRoot, 'build', 'icon.ico');
-const iconIcnsPath = resolve(projectRoot, 'build', 'icon.icns');
-
-if (!supportedTargets.includes(buildTarget || '')) {
-  console.error(
-    `Unsupported desktop target "${buildTarget ?? process.platform}". Use one of --mac, --win, or --linux.`,
-  );
-  process.exit(1);
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+async function localCli(root, dependency, command) {
+  const directory = join(root, 'node_modules', dependency);
+  const manifest = JSON.parse(await readFile(join(directory, 'package.json'), 'utf8').catch(() => { throw new Error(`Locked build dependency ${dependency} is missing; run npm ci, not an unpinned npx download`); }));
+  const bin = typeof manifest.bin === 'string' ? manifest.bin : manifest.bin?.[command];
+  if (typeof bin !== 'string') throw new Error(`Local CLI missing: ${command}`);
+  const entry = resolve(directory, bin), boundary = relative(directory, entry);
+  if (boundary.startsWith('..') || isAbsolute(boundary) || !(await lstat(entry).catch(() => null))?.isFile()) throw new Error(`Invalid locked local CLI: ${command}`);
+  return entry;
 }
-
-for (const directory of [releaseDir, tempDir, electronCacheDir, electronBuilderCacheDir]) {
-  mkdirSync(directory, { recursive: true });
+function run(command, args, environment, root) {
+  const result = spawnSync(command, args, { cwd: root, env: environment, stdio: 'inherit', shell: false });
+  if (result.error || result.status !== 0) throw new Error(`Desktop build command failed (${result.status ?? result.error?.message}); any staging output has been retained`);
 }
-
-const env = {
-  ...process.env,
-  TEMP: tempDir,
-  TMP: tempDir,
-  ELECTRON_CACHE: electronCacheDir,
-  ELECTRON_BUILDER_CACHE: electronBuilderCacheDir,
-};
-
-function run(command, args) {
-  const result = spawnSync(
-    process.platform === 'win32' ? 'cmd.exe' : command,
-    process.platform === 'win32' ? ['/d', '/s', '/c', [command, ...args].join(' ')] : args,
-    {
-      cwd: projectRoot,
-      env,
-      stdio: 'inherit',
-    },
-  );
-
-  if (result.error) {
-    throw result.error;
+export async function buildDesktop({ root = projectRoot, args = process.argv.slice(2), platform = process.platform, arch = process.arch, stamp = new Date().toISOString().replace(/[-:.TZ]/g, ''), environment = process.env, run: runner = run } = {}) {
+  const platforms = new Set(['linux', 'win', 'mac']);
+  const arches = new Set(['x64', 'arm64', 'universal', 'ia32', 'armv7l']);
+  const parsed = args.map(value => value.replace(/^--/, ''));
+  if (parsed.some(value => !platforms.has(value) && !arches.has(value))) throw new Error('Unsupported desktop arguments; choose a platform and a verified architecture');
+  const requestedTargets = [...new Set(parsed.filter(value => platforms.has(value)))];
+  if (requestedTargets.length > 1) throw new Error('Build one explicit desktop platform per invocation');
+  const target = requestedTargets[0] || { darwin: 'mac', win32: 'win', linux: 'linux' }[platform];
+  const requestedArchs = [...new Set(parsed.filter(value => arches.has(value)))];
+  const buildArchs = requestedArchs.length ? requestedArchs : [arch];
+  const mediaTargets = buildArchs.map(value => desktopMediaTarget(target, value));
+  const application = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+  const resources = [];
+  // Every requested target must pass preflight before the first build command runs.
+  for (const mediaTarget of mediaTargets) resources.push(await prepareDesktopResources(root, mediaTarget, application.version, stamp));
+  const viteCli = await localCli(root, 'electron-vite', 'electron-vite');
+  const builderCli = await localCli(root, 'electron-builder', 'electron-builder');
+  const cache = join(root, '.cache'), release = join(root, 'release');
+  const env = { ...environment, TEMP: join(cache, 'tmp'), TMP: join(cache, 'tmp'), ELECTRON_CACHE: join(cache, 'electron'), ELECTRON_BUILDER_CACHE: join(cache, 'electron-builder'), CSC_IDENTITY_AUTO_DISCOVERY: 'false' };
+  for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD']) delete env[name];
+  for (const directory of [env.TEMP, env.ELECTRON_CACHE, env.ELECTRON_BUILDER_CACHE]) await mkdir(directory, { recursive: true });
+  const logo = await lstat(join(root, 'build', 'yitoken-logo.svg')).catch(() => null);
+  const requiredIcons = ['icon.png', 'icon.ico', ...(target === 'mac' ? ['icon.icns'] : [])];
+  if (logo && (await Promise.all(requiredIcons.map(name => lstat(join(root, 'build', name)).catch(() => null)))).some(value => !value)) await runner(process.execPath, [join(root, 'scripts', 'generate-brand-icons.mjs')], env, root);
+  await runner(process.execPath, [viteCli, 'build'], env, root);
+  const outputs = [];
+  for (let index = 0; index < buildArchs.length; index++) {
+    const buildArch = buildArchs[index], snapshot = resources[index];
+    const staging = await mkdtemp(join(release, `build-staging-${target}-${buildArch}-${stamp}-`));
+    const suffix = staging.slice(staging.lastIndexOf('-') + 1);
+    const destination = join(release, 'build', application.version, `${target}-${buildArch}-${stamp}-${suffix}`);
+    const resourceEnvironment = { ...env, YITOKEN_VERIFIED_MEDIA_DIR: relative(root, snapshot.mediaDir), YITOKEN_VERIFIED_THIRD_PARTY_DIR: relative(root, snapshot.thirdPartyDir), YITOKEN_THIRD_PARTY_NOTICES: relative(root, snapshot.noticesFile), YITOKEN_DESKTOP_RESOURCE_PROVENANCE: relative(root, snapshot.resourceProvenanceFile) };
+    await runner(process.execPath, [builderCli, `--${target}`, `--${buildArch}`, `-c.directories.output=${staging}`], resourceEnvironment, root);
+    // Builder can exit zero after silently skipping missing extraResources. Inspect its output.
+    await verifyPackagedDesktopResources(staging, mediaTargets[index], snapshot);
+    const output = await finalizeDesktopOutput(staging, destination);
+    outputs.push(output);
+    console.log(`Unsigned desktop artifacts retained at ${output}`);
   }
-
-  if ((result.status ?? 1) !== 0) {
-    process.exit(result.status ?? 1);
-  }
+  return outputs;
 }
-
-function normalizeArch(arch) {
-  return arch === 'arm' ? 'armv7l' : arch;
-}
-
-function resolveBuilderArgs(arch) {
-  const builderArgs = [];
-
-  switch (buildTarget) {
-    case 'mac':
-      builderArgs.push('--mac');
-      break;
-    case 'win':
-      builderArgs.push('--win');
-      break;
-    case 'linux':
-      builderArgs.push('--linux');
-      break;
-    default:
-      break;
-  }
-
-  if (arch) {
-    builderArgs.push(`--${arch}`);
-  }
-
-  return builderArgs;
-}
-
-function resolveBuildArchs() {
-  if (requestedArchs.length > 0) {
-    return [...new Set(requestedArchs)];
-  }
-
-  return [normalizeArch(process.arch)];
-}
-
-function resolveFinalBuildOutputDir(arch) {
-  return resolve(defaultBuildOutputDir, `${buildTarget}-${arch}`);
-}
-
-function resolveStagingBuildOutputDir(arch) {
-  return resolve(releaseDir, `build-staging-${buildTarget}-${arch}-${buildStamp}`);
-}
-
-function shouldGenerateIcons() {
-  if (!existsSync(logoPath)) {
-    return false;
-  }
-
-  if (!existsSync(iconPngPath) || !existsSync(iconIcoPath)) {
-    return true;
-  }
-
-  return buildTarget === 'mac' && !existsSync(iconIcnsPath);
-}
-
-function tryRemoveDirectory(directory) {
-  if (!existsSync(directory)) {
-    return true;
-  }
-
-  try {
-    rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function finalizeBuildOutput(stagingBuildOutputDir, finalBuildOutputDir) {
-  if (!existsSync(stagingBuildOutputDir)) {
-    return;
-  }
-
-  mkdirSync(defaultBuildOutputDir, { recursive: true });
-
-  if (tryRemoveDirectory(finalBuildOutputDir)) {
-    try {
-      renameSync(stagingBuildOutputDir, finalBuildOutputDir);
-      console.log(`Build artifacts available at ${finalBuildOutputDir}`);
-      return;
-    } catch {
-    }
-  }
-
-  console.warn(
-    `Build artifacts were created at ${stagingBuildOutputDir} because ${finalBuildOutputDir} is still locked.`,
-  );
-}
-
-function buildForArch(arch) {
-  const stagingBuildOutputDir = resolveStagingBuildOutputDir(arch);
-  const finalBuildOutputDir = resolveFinalBuildOutputDir(arch);
-
-  run('npx', ['electron-builder', ...resolveBuilderArgs(arch), `-c.directories.output=${stagingBuildOutputDir}`]);
-  finalizeBuildOutput(stagingBuildOutputDir, finalBuildOutputDir);
-}
-
-if (shouldGenerateIcons()) {
-  run('node', [resolve(projectRoot, 'scripts', 'generate-icon.mjs')]);
-}
-
-const buildArchs = resolveBuildArchs();
-
-run('npx', ['electron-vite', 'build']);
-
-for (const arch of buildArchs) {
-  buildForArch(arch);
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try { await buildDesktop(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 }

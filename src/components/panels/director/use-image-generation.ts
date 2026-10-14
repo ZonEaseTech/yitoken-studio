@@ -18,8 +18,9 @@ export function normalizeUrl(url: unknown): string | undefined {
 // Process reference images to API-compatible format
 export async function processReferenceImages(urls: string[], maxCount: number = 4): Promise<string[]> {
   const processedRefs: string[] = [];
-  for (const url of urls.slice(0, maxCount)) {
-    if (!url) continue;
+  if (urls.length > maxCount) throw new Error(`参考图片超过 ${maxCount} 张，已停止生成，未丢弃任何素材`);
+  for (const url of urls) {
+    if (!url) throw new Error("参考图片地址为空，已停止生成");
     // HTTP/HTTPS URLs - use directly
     if (url.startsWith('http://') || url.startsWith('https://')) {
       processedRefs.push(url);
@@ -34,11 +35,9 @@ export async function processReferenceImages(urls: string[], maxCount: number = 
         const base64 = await readImageAsBase64(url);
         if (base64 && base64.startsWith('data:image/') && base64.includes(';base64,')) {
           processedRefs.push(base64);
-        }
-      } catch (e) {
-        console.warn('[ImageGen] Failed to read local image:', url, e);
-      }
-    }
+        } else throw new Error('参考图片无法读取，已停止生成');
+      } catch { throw new Error('参考图片无法读取，已停止生成'); }
+    } else throw new Error('参考图片格式不支持，已停止生成');
   }
   return processedRefs;
 }
@@ -95,6 +94,7 @@ export async function callImageGenerationApi(
   onProgress?: (progress: number) => void,
   signal?: AbortSignal,
 ): Promise<{ imageUrl: string; httpUrl: string }> {
+  if (signal?.aborted) throw new Error('用户已取消，未提交图片任务');
   const featureConfig = getImageApiConfig();
   if (!featureConfig) {
     throw new Error('请先在设置中配置图片生成服务映射');
@@ -122,6 +122,7 @@ export async function callImageGenerationApi(
     aspectRatio,
     referenceImages: referenceImages.length > 0 ? referenceImages : undefined,
     keyManager: imageKeyManager,
+    signal,
   });
 
   // Direct URL result

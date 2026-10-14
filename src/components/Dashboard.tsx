@@ -11,6 +11,7 @@
 import { useState, useCallback } from "react";
 import { useProjectStore } from "@/stores/project-store";
 import { useMediaPanelStore } from "@/stores/media-panel-store";
+import { copyProjectTimeline } from '@/lib/project-copy';
 import { switchProject } from "@/lib/project-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -72,19 +73,28 @@ export function Dashboard() {
   // ==================== Create / Open ====================
 
   const handleCreateProject = async () => {
-    if (newProjectName.trim()) {
-      const project = createProject(newProjectName.trim());
-      setNewProjectName("");
-      setShowNewProject(false);
+    if (!newProjectName.trim()) return;
+    const project = createProject(newProjectName.trim());
+    // Project metadata is retained even if the old project's timeline cannot be
+    // saved. Never delete user data as an implicit rollback of a failed switch.
+    setNewProjectName("");
+    setShowNewProject(false);
+    try {
       await switchProject(project.id);
       setActiveTab("overview");
+    } catch (error) {
+      toast.error(`项目「${project.name}」已创建，但未能打开；当前仍保留原项目。${error instanceof Error ? error.message : '请检查存储后再次打开'}`);
     }
   };
 
   const handleOpenProject = async (projectId: string) => {
-    if (selectionMode) return; // Don't open in selection mode
-    await switchProject(projectId);
-    setActiveTab("overview");
+    if (selectionMode) return;
+    try {
+      await switchProject(projectId);
+      setActiveTab("overview");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '无法切换项目，原项目内容已保留');
+    }
   };
 
   // ==================== Selection ====================
@@ -198,7 +208,9 @@ export function Dashboard() {
 
         // Rewrite activeProjectId so the new project's merge() keys data correctly.
         let dataToWrite = rawData;
-        try {
+        if (key.endsWith('/timeline')) {
+          dataToWrite = copyProjectTimeline(rawData, projectId, newProjectId);
+        } else try {
           const parsed = JSON.parse(rawData);
           const state = parsed?.state ?? parsed;
 
@@ -218,7 +230,8 @@ export function Dashboard() {
         }
 
         const newKey = key.replace(`_p/${projectId}`, `_p/${newProjectId}`);
-        await fs.setItem(newKey, dataToWrite);
+        const saved = await fs.setItem(newKey, dataToWrite);
+        if (!saved) throw new Error('复制项目保存失败，原项目未删除；请修复存储后重试');
         copiedCount++;
         console.log(`[Duplicate] Copied: ${key} → ${newKey}`);
       }
@@ -279,11 +292,11 @@ export function Dashboard() {
       <div className="h-16 border-b border-border bg-panel px-8 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-4">
           <div className="w-10 h-10 bg-primary text-primary-foreground flex items-center justify-center">
-            <Aperture className="w-6 h-6" />
+            <span className="text-2xl font-bold" aria-label="YITOKEN">Y</span>
           </div>
           <div>
-            <h1 className="text-lg font-bold text-foreground tracking-wide">魔因漫创</h1>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Moyin Creator Studio</p>
+            <h1 className="text-lg font-bold text-foreground tracking-wide">YITOKEN Studio</h1>
+            <p className="text-[10px] text-muted-foreground uppercase tracking-widest">AI 分镜、素材与整片工作台</p>
           </div>
         </div>
         

@@ -24,7 +24,4 @@ declare namespace NodeJS {
   }
 }
 
-// Used in Renderer process, expose in `preload.ts`
-interface Window {
-  ipcRenderer: import('electron').IpcRenderer
-}
+// Renderer bridge declarations live in src/types/electron.d.ts.

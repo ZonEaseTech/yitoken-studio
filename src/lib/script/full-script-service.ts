@@ -1406,6 +1406,7 @@ export async function calibrateEpisodeShots(
   }
   
   try {
+    const yitokenWorkflow = options.provider === 'yitoken' || useAPIConfigStore.getState().getProvidersForFeature('script_analysis').some(({ provider }) => provider.platform === 'yitoken');
     // 获取用户设置的并发数
     const concurrency = useAPIConfigStore.getState().concurrency || 1;
     const batchSize = 5; // 每个 AI 调用处理 5 个分镜
@@ -1469,7 +1470,7 @@ export async function calibrateEpisodeShots(
         // 带重试机制的 AI 调用
         let calibrations: Record<string, any> = {};
         let retryCount = 0;
-        const maxRetries = 3;
+        const maxRetries = yitokenWorkflow ? 1 : 3;
         
         while (retryCount < maxRetries) {
           try {
@@ -1488,7 +1489,7 @@ export async function calibrateEpisodeShots(
           } catch (err) {
             retryCount++;
             console.warn(`[calibrateShots] 批次 ${batchNum} 失败，重试 ${retryCount}/${maxRetries}:`, err);
-            if (retryCount >= maxRetries) {
+            if ((err as { retrySafe?: boolean })?.retrySafe === false || retryCount >= maxRetries) {
               console.error(`[calibrateShots] 批次 ${batchNum} 达到最大重试次数，跳过`);
               completedBatches++;
               return { batch, calibrations: {} as Record<string, any>, success: false as const };
@@ -1569,11 +1570,12 @@ export async function calibrateEpisodeShots(
     
     // 保存更新后的分镜
     store.setShots(projectId, updatedShots);
-    
+    const failedYitokenBatches = yitokenWorkflow ? totalBatches - results.filter(result => result.success).length : 0;
     return {
-      success: true,
+      success: failedYitokenBatches === 0,
       calibratedCount,
       totalShots,
+      ...(failedYitokenBatches > 0 ? { error: `${failedYitokenBatches} 个校准批次失败，可能已有阶段计费；请核对后台，不会自动重新执行整批流程` } : {}),
     };
   } catch (error) {
     console.error('[calibrateShots] Error:', error);

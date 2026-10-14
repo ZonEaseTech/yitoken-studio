@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { createProjectScopedStorage } from "@/lib/project-storage";
+import { useProjectStore } from "@/stores/project-store";
 import { nanoid } from "nanoid";
 
 export interface TimelineClip {
@@ -23,6 +24,8 @@ export interface TimelineClip {
 }
 
 interface SimpleTimelineStore {
+  boundProjectId: string | null;
+  loadError: string | null;
   // Clips on the timeline
   clips: TimelineClip[];
   
@@ -54,6 +57,8 @@ interface SimpleTimelineStore {
 export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
   persist(
     (set, get) => ({
+      boundProjectId: null,
+      loadError: null,
       clips: [],
       isPlaying: false,
       currentTime: 0,
@@ -61,7 +66,9 @@ export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
       activeClipId: null,
   
   addClip: (clipData) => {
+    if (!get().boundProjectId || get().boundProjectId !== useProjectStore.getState().activeProjectId || get().loadError) return;
     const { clips } = get();
+    if (!clipData.url || !Number.isFinite(clipData.duration) || clipData.duration <= 0) return;
     
     // Calculate start time (end of last clip)
     const startTime = clips.reduce((acc, clip) => acc + clip.duration, 0);
@@ -79,6 +86,7 @@ export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
   },
   
   removeClip: (id) => {
+    if (!get().boundProjectId || get().boundProjectId !== useProjectStore.getState().activeProjectId || get().loadError) return;
     const { clips } = get();
     const newClips = clips.filter(c => c.id !== id);
     
@@ -96,7 +104,9 @@ export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
   },
   
   reorderClips: (fromIndex, toIndex) => {
+    if (!get().boundProjectId || get().boundProjectId !== useProjectStore.getState().activeProjectId || get().loadError) return;
     const { clips } = get();
+    if (!Number.isInteger(fromIndex) || !Number.isInteger(toIndex) || fromIndex < 0 || toIndex < 0 || fromIndex >= clips.length || toIndex >= clips.length) return;
     const newClips = [...clips];
     const [removed] = newClips.splice(fromIndex, 1);
     newClips.splice(toIndex, 0, removed);
@@ -113,6 +123,7 @@ export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
   },
   
   clearTimeline: () => {
+    if (!get().boundProjectId || get().boundProjectId !== useProjectStore.getState().activeProjectId || get().loadError) return;
     set({ 
       clips: [], 
       currentTime: 0, 
@@ -153,16 +164,27 @@ export const useSimpleTimelineStore = create<SimpleTimelineStore>()(
       name: 'moyin-timeline-store',
       storage: createJSONStorage(() => createProjectScopedStorage('timeline')),
       partialize: (state) => ({
+        boundProjectId: state.boundProjectId,
+        loadError: state.loadError,
         // Only persist clips, not playback state
         clips: state.clips,
         totalDuration: state.totalDuration,
       }),
       merge: (persisted: any, current: any) => {
-        if (!persisted) return current;
+        const pid = useProjectStore.getState().activeProjectId;
+        const owned = persisted?.boundProjectId === pid;
+        const clips = owned && Array.isArray(persisted.clips) ? persisted.clips : [];
+        let startTime = 0;
+        const normalized = clips.map((clip: TimelineClip) => {
+          const duration = Number.isFinite(clip.duration) && clip.duration > 0 ? clip.duration : 5;
+          const result = { ...clip, duration, startTime };
+          startTime += duration;
+          return result;
+        });
         return {
-          ...current,
-          clips: persisted.clips ?? current.clips,
-          totalDuration: persisted.totalDuration ?? current.totalDuration,
+          ...current, boundProjectId: pid, clips: normalized, totalDuration: startTime,
+          loadError: owned ? persisted.loadError ?? null : '时间线尚未加载完成，请重新打开项目',
+          isPlaying: false, currentTime: 0, activeClipId: null,
         };
       },
     }

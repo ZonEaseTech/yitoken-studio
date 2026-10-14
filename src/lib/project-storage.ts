@@ -51,6 +51,85 @@ function getAllProjectIds(): string[] {
 
 // ==================== Project-Scoped Storage ====================
 
+// Timeline writes must finish before the project router changes. Payload binding,
+// rather than the mutable global router, identifies their destination.
+let timelineWrites = Promise.resolve();
+let timelineWriteError: unknown = null;
+let failedTimelineWrite: { key: string; value: string } | null = null;
+async function writeBoundTimeline(write: { key: string; value: string }): Promise<void> {
+  const native = typeof window !== 'undefined' ? window.fileStorage : undefined;
+  if (native) {
+    const saved = await native.setItem(write.key, write.value);
+    if (saved !== true) throw new Error('Timeline native write failed');
+  } else {
+    await fileStorage.setItem(write.key, write.value);
+  }
+}
+export async function flushTimelineWrites(): Promise<void> {
+  await timelineWrites;
+  if (timelineWriteError && failedTimelineWrite) {
+    const retry = failedTimelineWrite;
+    timelineWrites = timelineWrites.then(async () => {
+      await writeBoundTimeline(retry);
+      timelineWriteError = null;
+      failedTimelineWrite = null;
+    }).catch(error => { timelineWriteError = error; });
+    await timelineWrites;
+  }
+  if (timelineWriteError) throw new Error('时间线未能保存，已停止切换项目以保留当前内容；修复存储问题后可再次点击项目重试');
+}
+
+function createTimelineStorage(): StateStorage {
+  return {
+    async getItem() {
+      if (!useProjectStore.persist.hasHydrated()) {
+        await new Promise<void>(resolve => {
+          const unsub = useProjectStore.persist.onFinishHydration(() => { unsub(); resolve(); });
+        });
+      }
+      const pid = getActiveProjectId();
+      await flushTimelineWrites();
+      const empty = { boundProjectId: pid, clips: [], totalDuration: 0, loadError: null as string | null };
+      if (!pid) return JSON.stringify({ state: empty, version: 0 });
+      try {
+        // A global legacy timeline has no trustworthy project ownership. Migration
+        // is handled separately; never import it into an unrelated empty project.
+        const native = typeof window !== 'undefined' ? window.fileStorage : undefined;
+        const raw = native
+          ? await native.getItem(`_p/${pid}/timeline`)
+          : await fileStorage.getItem(`_p/${pid}/timeline`);
+        if (!raw) return JSON.stringify({ state: empty, version: 0 });
+        const parsed = JSON.parse(raw);
+        const payload = parsed?.state ?? parsed;
+        if (!Array.isArray(payload.clips) || payload.clips.some((clip: any) => !clip || typeof clip.id !== 'string' || typeof clip.url !== 'string') || (payload.boundProjectId && payload.boundProjectId !== pid)) throw new Error('Invalid timeline ownership');
+        return JSON.stringify({ state: { ...payload, boundProjectId: pid, loadError: null }, version: parsed.version ?? 0 });
+      } catch {
+        // Keep the original file untouched, but never leave another project's clips
+        // visible or renderable after a failed read.
+        return JSON.stringify({ state: { ...empty, loadError: '时间线读取失败，原文件已保留；请重新打开项目，当前不能合成' }, version: 0 });
+      }
+    },
+    setItem(_name, value) {
+      const state = JSON.parse(value)?.state;
+      const pid = state?.boundProjectId;
+      if (typeof pid !== 'string' || !pid || state.loadError) return Promise.resolve();
+      const write = { key: `_p/${pid}/timeline`, value };
+      const next = timelineWrites.then(async () => {
+        await writeBoundTimeline(write);
+        timelineWriteError = null;
+        failedTimelineWrite = null;
+      });
+      timelineWrites = next.catch(error => { timelineWriteError = error; failedTimelineWrite = write; });
+      return timelineWrites;
+    },
+    async removeItem() {
+      const pid = getActiveProjectId();
+      await flushTimelineWrites();
+      if (pid) await fileStorage.removeItem(`_p/${pid}/timeline`);
+    },
+  };
+}
+
 /**
  * Creates a StateStorage that routes data to _p/{activeProjectId}/{storeName}.json
  * Used for stores that are entirely project-scoped (script, director, timeline).
@@ -59,6 +138,7 @@ function getAllProjectIds(): string[] {
  * On setItem: writes to _p/{pid}/{storeName}
  */
 export function createProjectScopedStorage(storeName: string): StateStorage {
+  if (storeName === 'timeline') return createTimelineStorage();
   return {
     getItem: async (name: string): Promise<string | null> => {
       // 等待 project-store 完成 rehydration，确保拿到正确的 activeProjectId

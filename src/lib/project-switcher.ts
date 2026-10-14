@@ -19,6 +19,8 @@ import { useMediaStore } from '@/stores/media-store';
 import { useCharacterLibraryStore } from '@/stores/character-library-store';
 import { useSceneStore } from '@/stores/scene-store';
 import { useSimpleTimelineStore } from '@/stores/simple-timeline-store';
+import { flushTimelineWrites } from '@/lib/project-storage';
+import { usePreviewStore } from '@/stores/preview-store';
 import { useSClassStore } from '@/stores/sclass-store';
 
 /**
@@ -36,11 +38,26 @@ import { useSClassStore } from '@/stores/sclass-store';
  * @param newProjectId - The project ID to switch to
  * @returns Promise that resolves when all stores have been rehydrated
  */
-export async function switchProject(newProjectId: string): Promise<void> {
+let projectSwitchQueue = Promise.resolve();
+export function switchProject(newProjectId: string): Promise<void> {
+  const next = projectSwitchQueue.then(() => performProjectSwitch(newProjectId));
+  projectSwitchQueue = next.catch(() => {});
+  return next;
+}
+
+async function performProjectSwitch(newProjectId: string): Promise<void> {
+  await flushTimelineWrites();
   const currentId = useProjectStore.getState().activeProjectId;
   
-  // No-op if same project
-  if (currentId === newProjectId) return;
+  // Reopening the current project is also a retry path for a failed timeline read.
+  if (currentId === newProjectId) {
+    const timeline = useSimpleTimelineStore.getState();
+    if (timeline.boundProjectId !== newProjectId || timeline.loadError) {
+      usePreviewStore.getState().resetForProjectSwitch();
+      await useSimpleTimelineStore.persist.rehydrate();
+    }
+    return;
+  }
 
   console.log(`[ProjectSwitcher] Switching from ${currentId?.substring(0, 8) ?? 'none'} to ${newProjectId.substring(0, 8)}`);
 
@@ -53,6 +70,7 @@ export async function switchProject(newProjectId: string): Promise<void> {
   //    This controls which per-project files the storage adapters read/write.
   //    DO NOT set activeProjectId on individual stores yet — that triggers persist
   //    writes which would overwrite per-project files with empty data.
+  usePreviewStore.getState().resetForProjectSwitch();
   useProjectStore.getState().setActiveProject(newProjectId);
 
   // 3. Rehydrate all project-scoped stores FIRST

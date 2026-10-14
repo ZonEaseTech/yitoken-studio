@@ -9,6 +9,7 @@
  */
 
 import React, { useState, useCallback, useMemo, useRef } from "react";
+import { canAutomaticallyResubmitGeneration } from '@/lib/ai/yitoken-client';
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { 
@@ -1469,7 +1470,7 @@ export function SplitScenes({ onBack, onGenerateVideos }: SplitScenesProps) {
       console.log('[SplitScenes] Feature config for video_generation:', featureConfig ? {
         platform: featureConfig.platform,
         model: featureConfig.models?.[0],
-        apiKey: featureConfig.apiKey ? `${featureConfig.apiKey.substring(0, 8)}...` : 'empty',
+        credentialConfigured: Boolean(featureConfig.apiKey),
         providerId: featureConfig.provider?.id,
       } : 'null');
     }
@@ -2869,13 +2870,13 @@ export function SplitScenes({ onBack, onGenerateVideos }: SplitScenesProps) {
         // 重置该页分镜状态为 error，不让它们卡在 'generating'
         resetPageTasksToError(pageTasks, errorMsg);
         failedPages.push({ index: p, pageTasks, refs, error: errorMsg });
-        toast.warning(`第 ${p + 1}/${taskPages.length} 页失败，将自动重试：${errorMsg.substring(0, 60)}`);
+        toast.warning(`第 ${p + 1}/${taskPages.length} 页失败${platform === 'yitoken' ? '，请核对后台，不会自动重复提交' : '，将自动重试'}：${errorMsg.substring(0, 60)}`);
         // 继续下一页，不中断
       }
     }
 
     // 第二轮：自动重试失败的页面（延迟 5 秒后重试，给 API 恢复时间）
-    if (failedPages.length > 0 && !mergedAbortRef.current) {
+    if (canAutomaticallyResubmitGeneration(platform) && failedPages.length > 0 && !mergedAbortRef.current) {
       console.log(`[MergedGen] ${failedPages.length} 页失败，5 秒后自动重试...`);
       toast.info(`${failedPages.length} 页生成失败，5 秒后自动重试...`);
       await new Promise(r => setTimeout(r, 5000));
@@ -2987,7 +2988,7 @@ export function SplitScenes({ onBack, onGenerateVideos }: SplitScenesProps) {
 
     if (!taskId && !directUrl) {
       // 对非常规响应：尝试一次"无参考"重试（保持合并模式，不降级到单图通道）
-      if (refUrls.length > 0 && strategy !== 'none') {
+      if (canAutomaticallyResubmitGeneration(platform) && refUrls.length > 0 && strategy !== 'none') {
         const retryResult = await submitGridImageRequest({
           model,
           prompt,

@@ -77,6 +77,7 @@ export async function retryOperation<T>(
       return await operation();
     } catch (error) {
       lastError = error as Error;
+      if ((error as { retrySafe?: boolean })?.retrySafe === false) throw error;
 
       // Only retry on rate limit errors (when enabled)
       if (!retryOn429 || !isRateLimitError(error)) {

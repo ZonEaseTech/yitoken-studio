@@ -1,29 +1,28 @@
 {
-  "name": "moyin-creator",
-  "productName": "魔因漫创",
-  "version": "0.2.3",
-  "description": "AI 驱动的动漫/短剧分镜创作工具",
+  "name": "yitoken-studio",
+  "productName": "YITOKEN Studio",
+  "version": "0.1.0-alpha.1",
+  "description": "YITOKEN AI 分镜、素材创作与本地整片合成客户端（基于 Moyin Creator）",
   "author": "MemeCalculate",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/MemeCalculate/moyin-creator.git"
   },
-  "homepage": "https://github.com/MemeCalculate/moyin-creator",
+  "homepage": "https://yitoken.com.cn/downloads/",
   "bugs": {
-    "url": "https://github.com/MemeCalculate/moyin-creator/issues"
+    "url": "https://yitoken.com.cn/downloads/"
   },
   "updateConfig": {
-    "manifestUrl": "http://68.64.176.186/moyin/version.json",
-    "defaultGithubUrl": "https://github.com/MemeCalculate/moyin-creator",
-    "defaultBaiduUrl": "https://pan.baidu.com/s/1ImH6tOIiuFxIDXC0fC-6Lg",
-    "defaultBaiduCode": "8888"
+    "manifestUrl": "https://yitoken.com.cn/downloads/version.json",
+    "defaultGithubUrl": "https://yitoken.com.cn/downloads/",
+    "defaultBaiduUrl": "",
+    "defaultBaiduCode": ""
   },
   "type": "module",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "npm run build:desktop",
-    "prebuild": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/prebuild-cleanup.ps1",
     "build:desktop": "node ./scripts/build-desktop.mjs",
     "build:win": "node ./scripts/build-desktop.mjs --win",
     "build:mac": "node ./scripts/build-desktop.mjs --mac",
@@ -33,7 +32,15 @@
     "build:mac:universal": "node ./scripts/build-desktop.mjs --mac --universal",
     "build:linux": "node ./scripts/build-desktop.mjs --linux",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
-    "preview": "electron-vite preview"
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build:app": "electron-vite build",
+    "build:web": "vite build",
+    "release:source": "node scripts/package-source.mjs",
+    "build:media": "node scripts/build-media-toolchain.mjs",
+    "build:media:win": "node scripts/build-media-toolchain.mjs --win"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.2.16",
@@ -56,7 +63,7 @@
     "lucide-react": "^0.562.0",
     "mediabunny": "^1.37.0",
     "motion": "^12.35.0",
-    "nanoid": "^5.1.6",
+    "nanoid": "6.0.2",
     "next-themes": "^0.4.6",
     "radix-ui": "^1.4.3",
     "react": "^18.2.0",
@@ -75,24 +82,30 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@types/react": "^18.2.64",
     "@types/react-dom": "^18.2.21",
-    "@typescript-eslint/eslint-plugin": "^7.1.1",
-    "@typescript-eslint/parser": "^7.1.1",
+    "@typescript-eslint/eslint-plugin": "8.71.2",
+    "@typescript-eslint/parser": "8.71.2",
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.23",
-    "electron": "^30.0.1",
-    "electron-builder": "^24.13.3",
+    "electron": "44.7.2",
+    "electron-builder": "26.15.3",
     "electron-vite": "^5.0.0",
     "eslint": "^8.57.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.5",
     "png-to-ico": "^3.0.1",
     "postcss": "^8.5.6",
-    "sharp": "^0.34.5",
+    "sharp": "0.35.5",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.2.2",
-    "vite": "^5.1.6",
+    "vite": "6.4.4",
     "vite-plugin-electron": "^0.29.0",
-    "vite-plugin-electron-renderer": "^0.14.6"
+    "vite-plugin-electron-renderer": "^0.14.6",
+    "vitest": "5.0.4"
   },
-  "main": "out/main/index.cjs"
+  "main": "out/main/index.cjs",
+  "upstream": {
+    "repository": "https://github.com/MemeCalculate/moyin-creator.git",
+    "revision": "7e5c5655de94d49885e13c369f0a71212893a0aa",
+    "releaseTag": "V0.2.9"
+  }
 }

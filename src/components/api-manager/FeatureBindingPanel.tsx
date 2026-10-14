@@ -12,6 +12,7 @@
 
 import { useMemo, useState } from "react";
 import { useAPIConfigStore, type AIFeature } from "@/stores/api-config-store";
+import { supportsYitokenFeature } from '@/lib/ai/yitoken-client';
 import { parseApiKeys, classifyModelByName, type ModelCapability } from "@/lib/api-key-manager";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -243,6 +244,7 @@ export function FeatureBindingPanel() {
     providers,
     modelTypes,
     modelTags,
+    modelEndpointTypes,
     modelEnableGroups,
     setFeatureBindings,
     toggleFeatureBinding,
@@ -280,6 +282,7 @@ export function FeatureBindingPanel() {
           .filter((m) => m.length > 0);
 
         for (const model of models) {
+          if (provider.platform === 'yitoken' && !supportsYitokenFeature(feature.key, model, modelEndpointTypes)) continue;
           // 使用平台元数据 (model_type/tags) 进行精确分类
           const mType = modelTypes[model];
           const mTags = modelTags[model];
@@ -306,7 +309,7 @@ export function FeatureBindingPanel() {
     }
 
     return map;
-  }, [providers, configuredProviderIds, modelTypes, modelTags]);
+  }, [providers, configuredProviderIds, modelTypes, modelTags, modelEndpointTypes]);
 
   // 计算已配置的功能数（至少有一个有效绑定）
   const configuredCount = useMemo(() => {

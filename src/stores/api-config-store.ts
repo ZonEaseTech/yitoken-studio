@@ -3,12 +3,14 @@
 // Commercial licensing available. See COMMERCIAL_LICENSE.md.
 /**
  * API Config Store v2
- * Manages API providers and keys with localStorage persistence
+ * Manages API providers and keys with protected desktop persistence
  * Supports multi-key rotation and IProvider interface (AionUi pattern)
  */
 
+import { syncYitokenModels, normalizeYitokenRoot, supportsYitokenFeature, YITOKEN_DEFAULT_ENDPOINTS, YITOKEN_DEFAULT_MODELS } from '@/lib/ai/yitoken-client';
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { secureApiStorage } from '@/lib/secure-api-storage';
 import type { ProviderId, ServiceType } from '@opencut/ai-core';
 import { 
   type IProvider, 
@@ -130,7 +132,7 @@ export const IMAGE_HOST_PRESETS: Omit<ImageHostProvider, 'id' | 'apiKey'>[] = [
     name: 'SCDN 图床',
     baseUrl: 'https://img.scdn.io',
     uploadPath: '/api/v1.php',
-    enabled: true,
+    enabled: false,
     apiKeyOptional: true,
     imageField: 'image',
     imagePayloadType: 'file',
@@ -189,7 +191,7 @@ export const IMAGE_HOST_PRESETS: Omit<ImageHostProvider, 'id' | 'apiKey'>[] = [
   },
 ];
 
-/** 首次启动默认创建的图床（仅 SCDN 默认开启，ImgBB 默认关闭） */
+/** 首次启动图床全部关闭，须用户自行配置并明确开启 */
 export const DEFAULT_IMAGE_HOST_PROVIDERS: Omit<ImageHostProvider, 'id' | 'apiKey'>[] =
   IMAGE_HOST_PRESETS.filter((preset) => preset.platform === 'scdn' || preset.platform === 'imgbb');
 
@@ -506,8 +508,8 @@ const defaultFeatureBindings: FeatureBindings = {
 };
 const defaultImageHostProviders: ImageHostProvider[] = createDefaultImageHostProviders();
 
-// Pre-fill MemeFast for new users (no API Key, just the provider entry)
-const memefastTemplate = DEFAULT_PROVIDERS.find(p => p.platform === 'memefast');
+// Pre-fill YITOKEN for new users (no API Key, just the provider entry)
+const yitokenTemplate = DEFAULT_PROVIDERS.find(p => p.platform === 'yitoken');
 
 function omitRecordKeys<T>(record: Record<string, T>, keys: Iterable<string>): Record<string, T> {
   const next = { ...record };
@@ -518,17 +520,17 @@ function omitRecordKeys<T>(record: Record<string, T>, keys: Iterable<string>): R
 }
 
 const initialState: APIConfigState = {
-  providers: memefastTemplate
-    ? [{ id: generateId(), ...memefastTemplate, apiKey: '' }]
+  providers: yitokenTemplate
+    ? [{ id: generateId(), ...yitokenTemplate, apiKey: '' }]
     : [],
-  featureBindings: defaultFeatureBindings,
+  featureBindings: Object.fromEntries(Object.keys(defaultFeatureBindings).map(feature => [feature, YITOKEN_DEFAULT_MODELS[feature] ? [`yitoken:${YITOKEN_DEFAULT_MODELS[feature]}`] : null])) as FeatureBindings,
   apiKeys: {},
   concurrency: 1,  // Default to serial execution (single key rate limit)
   aspectRatio: '16:9',
   orientation: 'landscape',
   advancedOptions: { ...DEFAULT_ADVANCED_OPTIONS },
   imageHostProviders: defaultImageHostProviders,
-  modelEndpointTypes: {},
+  modelEndpointTypes: { ...YITOKEN_DEFAULT_ENDPOINTS },
   modelTypes: {},
   modelTags: {},
   modelEnableGroups: {},
@@ -547,6 +549,7 @@ export const useAPIConfigStore = create<APIConfigStore>()(
       addProvider: (providerData) => {
         const newProvider: IProvider = {
           ...providerData,
+          baseUrl: providerData.platform === 'yitoken' ? normalizeYitokenRoot(providerData.baseUrl) : providerData.baseUrl,
           id: generateId(),
         };
         set((state) => ({
@@ -559,6 +562,7 @@ export const useAPIConfigStore = create<APIConfigStore>()(
       },
 
       updateProvider: (provider) => {
+        if (provider.platform === 'yitoken') provider = { ...provider, baseUrl: normalizeYitokenRoot(provider.baseUrl) };
         set((state) => ({
           providers: state.providers.map(p => p.id === provider.id ? provider : p),
         }));
@@ -596,6 +600,23 @@ export const useAPIConfigStore = create<APIConfigStore>()(
         if (!baseUrl) return { success: false, count: 0, error: 'Base URL 未配置' };
 
         try {
+          if (provider.platform === 'yitoken') {
+            const models = new Set<string>();
+            const endpoints: Record<string, string[]> = {};
+            let success = false;
+            for (const key of keys) {
+              try {
+                const result = await syncYitokenModels(baseUrl, key);
+                result.models.forEach(model => models.add(model));
+                Object.assign(endpoints, result.endpoints);
+                success = true;
+              } catch { /* Other user-provided keys may have different model access. */ }
+            }
+            if (!success) return { success: false, count: 0, error: '模型列表请求失败，请检查 Key 权限和 HTTPS 地址' };
+            get().updateProvider({ ...provider, model: [...models] });
+            set(state => ({ modelEndpointTypes: { ...omitRecordKeys(state.modelEndpointTypes, provider.model), ...endpoints } }));
+            return { success: true, count: models.size };
+          }
           // 用 Set 收集所有 key 的模型，自动去重
           const allModelIds = new Set<string>();
           const isMemefast = provider.platform === 'memefast';
@@ -869,6 +890,7 @@ export const useAPIConfigStore = create<APIConfigStore>()(
             continue;
           }
 
+          if (provider.platform === 'yitoken' && !supportsYitokenFeature(feature, model, get().modelEndpointTypes)) continue;
           results.push({ provider, model });
         }
         return results;
@@ -908,7 +930,7 @@ export const useAPIConfigStore = create<APIConfigStore>()(
           get().updateProvider({ ...existingProvider, apiKey: key });
         }
         
-        console.log(`[APIConfig] Updated ${provider} API key: ${get().maskApiKey(key)}`);
+        console.log(`[APIConfig] Updated ${provider} credential`);
       },
 
       getApiKey: (provider) => {
@@ -1129,8 +1151,9 @@ export const useAPIConfigStore = create<APIConfigStore>()(
       },
     }),
     {
-      name: 'opencut-api-config',  // localStorage key
-      version: 13,  // v13: clear stale metadata caches on upgrade + fix chained migration
+      name: 'opencut-api-config',  // preserve migration key
+      storage: createJSONStorage(() => secureApiStorage),
+      version: 14,  // v14: YITOKEN default and explicit third-party upload opt-in
       migrate: (persistedState: unknown, version: number) => {
         // Use mutable result object for chained migration
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1439,6 +1462,14 @@ export const useAPIConfigStore = create<APIConfigStore>()(
 
         // Resolve image host providers (handles all legacy formats)
         result.imageHostProviders = resolveImageHostProviders();
+        if (version < 14) {
+          result.imageHostProviders = result.imageHostProviders.map(host => ({ ...host, enabled: false }));
+          const providers = result.providers || [];
+          if (!providers.some(provider => provider.platform === 'yitoken')) {
+            result.providers = [...providers, { ...yitokenTemplate!, id: generateId(), apiKey: '' }];
+          }
+          result.modelEndpointTypes = { ...YITOKEN_DEFAULT_ENDPOINTS, ...result.modelEndpointTypes };
+        }
 
         console.log(`[APIConfig] Migration complete: v${version}`);
         return result;

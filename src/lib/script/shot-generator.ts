@@ -6,6 +6,8 @@
  * Generates images and videos for individual shots using AI APIs
  */
 
+import { generateYitokenImage, generateYitokenVideo, isYitokenRequest } from "@/lib/ai/yitoken-client";
+import { uploadBase64Image } from "@/lib/utils/image-upload";
 import type { Shot } from "@/types/script";
 import { retryOperation } from "@/lib/utils/retry";
 import { delay, RATE_LIMITS } from "@/lib/utils/rate-limiter";
@@ -25,6 +27,7 @@ export interface ShotGenerationConfig {
   referenceImages?: string[]; // Character reference images for consistency
   imageResolution?: '1K' | '2K' | '4K';
   videoResolution?: '480p' | '720p' | '1080p';
+  signal?: AbortSignal;
 }
 
 export interface ShotGenerationResult {
@@ -176,6 +179,18 @@ export async function generateShotImage(
 
   onProgress?.(10);
 
+  if (isYitokenRequest(baseUrl, config.provider)) {
+    if (config.signal?.aborted) throw new Error('用户已取消，未提交图片任务');
+    const references = await Promise.all(referenceImages.map(uploadBase64Image));
+    const [w, h] = aspectRatio.split(':').map(Number);
+    const scale = config.imageResolution === '4K' ? 4096 : 2048;
+    const width = Math.round(Math.sqrt(w / h) * scale / 8) * 8;
+    const height = Math.round(Math.sqrt(h / w) * scale / 8) * 8;
+    const result = await generateYitokenImage({ apiKey, baseUrl, model, prompt, size: `${width}x${height}`, referenceImages: references, signal: config.signal });
+    onProgress?.(100);
+    return result.imageUrl;
+  }
+
   // Use retry wrapper for 429 rate limit handling
   const data = await retryOperation(async () => {
     const response = await fetch(buildEndpoint(baseUrl, 'images/generations'), {
@@ -283,6 +298,13 @@ export async function generateShotVideo(
   };
 
   onProgress?.(10);
+
+  if (isYitokenRequest(baseUrl, config.provider)) {
+    if (config.signal?.aborted) throw new Error('用户已取消，未提交视频任务');
+    const images = await Promise.all(roles.map(async image => ({ ...image, url: await uploadBase64Image(image.url) })));
+    const result = await generateYitokenVideo({ apiKey, baseUrl, model, prompt, duration: shot.duration || 5, aspectRatio, resolution: config.videoResolution, images, enableAudio: true, cameraFixed: false, onProgress, signal: config.signal });
+    return result.url;
+  }
 
   // Use retry wrapper for 429 rate limit handling
   const data = await retryOperation(async () => {

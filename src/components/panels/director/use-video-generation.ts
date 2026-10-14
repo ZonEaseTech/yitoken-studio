@@ -1,6 +1,7 @@
 // Copyright (c) 2025 hotflow2024
 // Licensed under AGPL-3.0-or-later. See LICENSE for details.
 // Commercial licensing available. See COMMERCIAL_LICENSE.md.
+import { generateYitokenVideo } from "@/lib/ai/yitoken-client";
 import { getFeatureConfig } from "@/lib/ai/feature-router";
 import { uploadToImageHost, isImageHostConfigured } from "@/lib/image-host";
 import { saveVideoToLocal, readImageAsBase64 } from "@/lib/image-storage";
@@ -295,8 +296,7 @@ function handleVideoSubmitError(
 ): never {
   if (keyManager?.handleError(status, errorText)) {
     const nextKey = keyManager.getCurrentKey?.();
-    const keyHint = nextKey ? `${nextKey.substring(0, 8)}…` : '(none)';
-    console.log(`[VideoGen] Rotated to next key: ${keyHint} (due to ${status})`);
+    console.log(`[VideoGen] Rotated configured credential (due to ${status})`);
   }
   let errorMessage = `视频 API 错误: ${status}`;
   try {
@@ -421,7 +421,7 @@ export async function callVideoGenerationApi(
   prompt: string,
   duration: number,
   aspectRatio: string,
-  imageWithRoles: Array<{ url: string; role: 'first_frame' | 'last_frame' }>,
+  imageWithRoles: Array<{ url: string; role: 'first_frame' | 'last_frame' | 'reference_image' }>,
   onProgress?: (progress: number) => void,
   keyManager?: { getCurrentKey?: () => string | null; handleError: (status: number, errorText?: string) => boolean; getAvailableKeyCount: () => number; getTotalKeyCount: () => number },
   platform?: string,
@@ -436,6 +436,8 @@ export async function callVideoGenerationApi(
   cameraFixed?: boolean,
   /** 外部中止信号，用于停止生成时真正取消网络请求 */
   signal?: AbortSignal,
+  /** YITOKEN: additional explicit image references are never silently omitted. */
+  referenceImageUrls?: string[],
 ): Promise<string> {
   const featureConfig = getFeatureConfig('video_generation');
   const resolvedPlatform = platform || featureConfig?.platform;
@@ -451,9 +453,14 @@ export async function callVideoGenerationApi(
     throw new Error('请先在设置中配置视频生成服务映射');
   }
 
+  if (resolvedPlatform === 'yitoken') {
+    const result = await generateYitokenVideo({ apiKey: keyManager?.getCurrentKey?.() || apiKey, prompt, duration, aspectRatio, baseUrl: videoBaseUrl, model, images: [...imageWithRoles, ...(referenceImageUrls || []).map(url => ({ url, role: 'reference_image' as const }))], resolution: videoResolution, videoRefs, audioRefs, enableAudio, cameraFixed, onProgress, signal });
+    return result.url;
+  }
+
   // 确保所有输入图片满足视频 API 的最小尺寸要求（如 Seedance ≥ 300px）
   const processedImages = await Promise.all(
-    imageWithRoles.map(async (img) => ({
+    imageWithRoles.filter((img): img is { url: string; role: 'first_frame' | 'last_frame' } => img.role !== 'reference_image').map(async (img) => ({
       ...img,
       url: await ensureMinImageSize(img.url),
     }))
@@ -467,8 +474,7 @@ export async function callVideoGenerationApi(
     if (signal?.aborted) return Promise.reject(new Error('用户已取消'));
     // 每次重试动态取当前 key（keyManager.handleError 已 rotate，需要用新 key）
     const currentApiKey = keyManager?.getCurrentKey?.() || apiKey;
-    const keyHint = currentApiKey ? `${currentApiKey.substring(0, 8)}…` : '(none)';
-    console.log(`[VideoGen] Using key: ${keyHint}, format: ${format}`);
+    console.log(`[VideoGen] Using configured credential, format: ${format}`);
     switch (format) {
       case 'openai_official':
         return callOpenAIOfficialVideoApi(currentApiKey, prompt, videoBaseUrl, model, aspectRatio, duration, videoResolution, onProgress, keyManager, signal);

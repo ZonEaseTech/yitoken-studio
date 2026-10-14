@@ -10,6 +10,8 @@
 
 import { buildStoryboardPrompt, getDefaultNegativePrompt, type StoryboardPromptConfig, type CharacterInfo } from './prompt-builder';
 import { calculateGrid, type AspectRatio, type Resolution, RESOLUTION_PRESETS } from './grid-calculator';
+import { generateYitokenVideo, isYitokenRequest } from "@/lib/ai/yitoken-client";
+import { uploadBase64Image } from "@/lib/utils/image-upload";
 import { retryOperation } from "@/lib/utils/retry";
 import { delay, RATE_LIMITS } from "@/lib/utils/rate-limiter";
 import { submitGridImageRequest } from '@/lib/ai/image-generator';
@@ -707,6 +709,18 @@ export async function generateSceneVideos(
       }
 
       onSceneProgress?.(scene.id, 10);
+
+      if (isYitokenRequest(baseUrl || '', provider)) {
+        if (!model || !baseUrl) throw new Error('请先配置 YITOKEN 视频模型与 HTTPS 根地址');
+        const images = await Promise.all([
+          { url: scene.imageDataUrl, role: 'first_frame' as const },
+          ...characterReferenceImages.map(url => ({ url, role: 'reference_image' as const })),
+        ].map(async image => ({ ...image, url: await uploadBase64Image(image.url) })));
+        const result = await generateYitokenVideo({ apiKey, baseUrl, model, prompt: scene.videoPrompt, duration: 5, aspectRatio, resolution: config.videoResolution, images, onProgress: progress => onSceneProgress?.(scene.id, progress) });
+        results.set(scene.id, result.url);
+        onSceneComplete?.(scene.id, result.url);
+        continue;
+      }
 
       // Submit video generation task directly to external API
       // API supports base64 data URLs directly

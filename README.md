@@ -1,250 +1,73 @@
-<div align="center">
-<small>✨ 赞助商</small>
-</div>
+# YITOKEN Studio — AGPL 初版
 
-<table style="width:100%;border:1px solid #d1d9e0;border-radius:12px;border-collapse:separate;">
-  <tr>
-    <td align="center" style="padding:0;border:none;">
-      <a href="https://api.memefast.cc/" target="_blank">
-        <img width="100%" src="https://github.com/user-attachments/assets/bd9d2127-32e3-460c-a304-dde83a7c6a1d" alt="Memefast">
-      </a>
-    </td>
-  </tr>
-  <tr>
-    <td align="left" style="padding:18px 24px 22px 24px;border:none;background:#ffffff;">
-      <a href="https://api.memefast.cc/" target="_blank" style="text-decoration:none;font-size:22px;color:#24292f;font-weight:bold;">Memefast API中转聚合服务</a>
-      <br>
-      <span style="font-size:16px;color:#57606a;">更多模型，高稳定API通道</span>
-      <br>
-      <a href="https://api.memefast.cc/" target="_blank" style="font-size:16px;color:#0969da;margin-top:10px;display:inline-block;">🔗 https://api.memefast.cc/</a>
-    </td>
-  </tr>
-</table>
+YITOKEN 品牌的桌面 AI 分镜、素材创作与**整片合成**客户端，默认平台入口为 `https://yitoken.com.cn`。官方下载、帮助及同版本源码入口：[YITOKEN 下载页](https://yitoken.com.cn/downloads/)。下载页应明确列出每个平台的实际可用状态；没有完成构建或安装验证的平台不得标成已支持/已验收。
 
-<br>
+## 来源与许可证
 
+本派生版本源于 [MemeCalculate/moyin-creator（魔因漫创 / Moyin Creator）](https://github.com/MemeCalculate/moyin-creator)，基线提交 `7e5c5655de94d49885e13c369f0a71212893a0aa`。上游文件中的 `Copyright (c) 2025 hotflow2024`、作者归属、许可证以及第三方声明均保留；原始 README 另存为 [README_UPSTREAM.md](README_UPSTREAM.md)。品牌调整不代表上游作者为 YITOKEN 背书。
 
+本派生版本以 **AGPL-3.0-or-later** 分发，全文见 [LICENSE](LICENSE)，来源声明见 [NOTICE.md](NOTICE.md)。上游 [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) 为原有授权信息，不意味着已取得本派生版本闭源许可。分发者必须保留适用声明、给出实际分发版本的完整对应源码与构建材料；网络交互适用的源码提供义务也不得省略。每个正式下载须同时提供同版本源码归档、锁文件、构建脚本、版本来源与 SHA256，不能只链接上游旧版本代替对应源码。
 
+## 能做什么 / 不能做什么
 
-
-<p align="center">
-  <img src="build/icon.png" width="120" alt="魔因漫创 Logo" />
-</p>
-<h1 align="center">魔因漫创 Moyin Creator</h1>
-
-<p align="center">
-  <strong>🎬 AI 影视生产级工具 · 支持 Seedance 2.0 · 剧本到成片全流程批量化</strong>
-</p>
-
-<p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License" /></a>
-  <a href="https://github.com/MemeCalculate/moyin-creator/releases"><img src="https://img.shields.io/github/v/release/MemeCalculate/moyin-creator" alt="Release" /></a>
-  <a href="https://github.com/MemeCalculate/moyin-creator/stargazers"><img src="https://img.shields.io/github/stars/MemeCalculate/moyin-creator" alt="Stars" /></a>
-</p>
-
-<p align="center">
-  <strong>🇨🇳 中文</strong> | <a href="README_EN.md">🇬🇧 English</a>
-</p>
-
-<p align="center">
-  <a href="docs/WORKFLOW_GUIDE.md"><strong>📖 工作流教程</strong></a> •
-  <a href="#功能特性">功能特性</a> •
-  <a href="#快速开始">快速开始</a> •
-  <a href="#技术架构">技术架构</a> •
-  <a href="#许可证">许可证</a> •
-  <a href="#贡献">贡献</a>
-</p>
-
----
-
-<!-- 截图占位：后续替换为实际截图
-<p align="center">
-  <img src="docs/images/screenshot.png" width="800" alt="Screenshot" />
-</p>
--->
-
-![1771428968476_3nkjdd](https://github.com/user-attachments/assets/582ee70f-f0dc-433b-9d5c-2ddb8f463450)
-
-## 简介
-
-**魔因漫创** 是一款面向 AI 影视创作者的生产级工具。五大板块环环相扣，覆盖从剧本到成片的完整创作链路：
-
-> **📝 剧本 → 🎭 角色 → 🌄 场景 → 🎬 导演 → ⭐ S级（Seedance 2.0）**
-
-每一步的产出自动流入下一步，无需手动搅合。支持多种主流 AI 大模型，适合短剧、动漫番剧、预告片等场景的批量化生产。
-
-
-基础设置教程：https://www.bilibili.com/video/BV1FsZDBHExJ/?vd_source=802462c0708e775ce81f95b2e486f175
-
-
-## 功能特性
-
-### ⭐ S级板块 — Seedance 2.0 多模态创作 SkyReels-V4 多模态创作
-- **多镜头合并叙事视频生成**：将多个分镜分组合并生成连贯叙事视频
-- 支持 @Image / @Video / @Audio 多模态引用（角色参考图、场景图、首帧图自动收集）
-- 智能提示词构建：自动三层融合（动作 + 镜头语言 + 对白唇形同步）
-- 首帧图网格拼接（N×N 策略）
-- Seedance 2.0 参数约束自动校验（≤9图 + ≤3视频 + ≤3音频，prompt≤5000字符）
-- <img width="1388" height="891" alt="685ccb3dcbc6205677b6b25456d9221" src="https://github.com/user-attachments/assets/43e29f00-0a3e-4910-864c-357b203d410f" />
-<img width="1384" height="894" alt="f71978f46aaeb090bc8a462b283fe6c" src="https://github.com/user-attachments/assets/fa5c7156-531e-416c-b5fc-b859a7b452e3" />
-<img width="1385" height="890" alt="b39cbf8ed8b0e765d67c11cebdd5f22" src="https://github.com/user-attachments/assets/0081d627-cf63-4527-9ee8-58149f128455" />
-<img width="1928" height="1048" alt="eeb79c960bf6a2213978f6dd70ee885" src="https://github.com/user-attachments/assets/07d244a7-6ad4-42fb-8e76-35241bee4c50" />
-
-- <img width="578" height="801" alt="eecf9d3e210cb52066025a0d1b48b54" src="https://github.com/user-attachments/assets/34b623a3-9be9-4eb5-ae52-a6a9553598ea" />
-<img width="584" height="802" alt="59e57c230f67e2c5aaa425a09332d2e" src="https://github.com/user-attachments/assets/54c6036b-c545-45c0-a32b-de71b8138484" />
-
-<img width="1602" height="835" alt="1b23b9abde0cc651ecb06d49576119b" src="https://github.com/user-attachments/assets/2b5af973-98c9-4708-bf53-02d11321d86d" />
-
-### 🎬 剧本解析引擎
-- 智能拆解剧本为场景、分镜、对白
-- 自动识别角色、场景、情绪、镜头语言
-- 支持多集/多幕剧本结构
-<img width="1384" height="835" alt="d37f36356961edcda06edee6382d2fe" src="https://github.com/user-attachments/assets/e42266c2-aaeb-4cc3-a734-65516774d495" />
-
-### 🎭 角色一致性系统
-- **6层身份锚点**：确保同一角色在不同分镜中外观一致
-- 角色圣经 (Character Bible) 管理
-- 支持角色参考图绑定
-<img width="1384" height="835" alt="ffcddeeda0e1aa012529ed26c850a65" src="https://github.com/user-attachments/assets/763e6ced-43e2-4c7b-a5ea-b13535af5b2e" />
-
-### 🖼️ 场景生成
-- 多视角联合图生成
-- 场景描述到视觉提示词的自动转换
-<img width="1384" height="835" alt="8a5f019882995cd573b614d1e403ab3" src="https://github.com/user-attachments/assets/f301d91e-c826-499f-b3dd-79e69613a5e8" />
-
-### 🎞️ 专业分镜系统
-- 电影级摄影参数（景别、机位、运动方式）
-- 自动排版和导出
-- 视觉风格一键切换（2D/3D/写实/定格等）
-<img width="1602" height="835" alt="916ad7c32920260c7f3ac89fbeb8f30" src="https://github.com/user-attachments/assets/94562cee-3827-4645-82fe-2123fdd86897" />
-
-### 🚀 批量化生产工作流
-- **一键全流程**：剧本解析 → 角色/场景生成 → 分镜切割 → 批量生图 → 批量生视频
-- 多任务并行队列，自动重试失败任务
-- 适合短剧/动漫番剧批量生产
-
-### 🤖 多供应商 AI 调度
-- 支持多个 AI 图像/视频生成服务商
-- API Key 轮询负载均衡
-- 任务队列管理，自动重试
-### 下载
-打包程序版本0.1.7，对应开源源码
-链接: https://pan.baidu.com/s/1ImH6tOIiuFxIDXC0fC-6Lg 提取码: 8888 
-
-
-## 快速开始
-
-### 环境要求
-
-- **Node.js** >= 18
-- **npm** >= 9
-
-### 安装运行
-
-```bash
-# 克隆仓库
-git clone https://github.com/MemeCalculate/moyin-creator.git
-cd moyin-creator
-
-# 安装依赖
-npm install
-
-# 启动开发模式
-npm run dev
+```text
+新建项目 -> 编辑剧本 / 分镜 -> 配置本人 API Key -> 同步模型列表
+                                      |
+                  选择已接入且可用的模型 -> 用户主动发起生成（可能计费）
+                                      |
+                  图片 / 视频片段 -> 当前项目时间线排序 -> 本机合成整片 MP4
+                                     |
+                          可另行导出素材文件 + 项目清单
 ```
 
-### 配置 API Key
+- 不配置 Key 也可安装、创建项目、编辑与管理已有本地素材。应用不内置运营方 Key，不保证任何免费生成额度。
+- 同步模型/连接测试只查询模型列表，不发起生成；是否有服务商自身的访问策略以平台规则为准。
+- AI 图片、视频与文字生成使用用户的账号额度，按平台账单计费；初版没有客户端充值或账单结算实现。模型显示在列表不等于已经完成真实生成验证。
+- 本地时间线按当前项目顺序合成完整片段，输出 H.264/AAC MP4；720p/1080p、16:9/9:16、30fps，不同比例留黑边、不拉伸。保留原音，无音轨补静音，以探测到的真实时长为准；不支持自动字幕、BGM 混音、裁剪或多轨编辑。
+- 素材导出是图片、视频片段和 manifest 清单，不是剪辑工程打包或整片文件。逐个下载只能确认下载已交给浏览器，浏览器可能拦截批量下载，用户须检查目录。
+- 部分文件下载/写入失败时，会显示失败文件名并保留已输出文件；不会将有缺失的素材包提示为全部成功。manifest 中的路径是预计素材路径，不可当作文件完整性证明。
+- 项目分享链接与用量报表卡片目前未实现，不提供假操作入口。
+- 旧后台 Worker 依赖上游独立 `/api/ai/*` 服务，未接入此桌面初版，真实提交明确拒绝；请使用已接入模型的导演等生成入口。保留的 Mock 演示不是真实生成验收。
 
-启动后，进入 **设置 → API 配置**，填入你的 AI 服务商 API Key 即可开始使用。
+## Key、隐私与素材上传
 
-### 构建
+首次使用请在设置页配置**本人**平台地址与 Key。桌面版本通过 Electron 主进程系统加密接口保存 API 配置；系统加密不可用时不降级写明文。旧配置迁移失败不得抹掉旧 Key，必须清楚提示未安全保存。渲染进程需要 Key 来访问 API，这不是硬件隔离的密钥保险箱；设备失陷、恶意扩展或渲染漏洞仍可能泄露，建议最小权限、额度上限与定期轮换。
 
-```bash
-# 编译 + 打包 Windows 安装程序
-npm run build
+生成时，提示词、参考图或其他提交材料会发送给所选服务商。参考图上传到公开图床可能产生第三方可访问 URL；默认不启用匿名公共上传，需要用户明确同意并配置存储。不要上传未获授权的肖像、版权素材或机密内容。提交前应核对平台地址、存储位置、素材授权和成本。
 
-# 仅编译（不打包）
-npx electron-vite build
+## 从完整源码构建
+
+建议使用 Node.js 22 LTS 或 24 LTS；依赖版本以 `package-lock.json` 为准。首次开发安装：
+
+```sh
+npm ci
+npm run typecheck
+npm run test
+npm run build:app
+# 品牌图标是 SVG 生成的代码原生资产，不依赖图像生成服务
+node scripts/generate-brand-icons.mjs
+npm run build:media
+# Windows 交叉编译另用 npm run build:media:win，需要 MinGW
+npm run build:linux
 ```
 
-## 技术架构
+Electron 首次下载和平台打包工具可能需要联网。若安装禁用了依赖 lifecycle scripts，必须另行完成 Electron 运行时安装才能运行/打包；仅 renderer 构建不等于桌面应用验收。
 
-| 层级 | 技术 |
-|------|------|
-| 桌面框架 | Electron 30 |
-| 前端框架 | React 18 + TypeScript |
-| 构建工具 | electron-vite (Vite 5) |
-| 状态管理 | Zustand 5 |
-| UI 组件 | Radix UI + Tailwind CSS 4 |
-| AI 核心 | `@opencut/ai-core`（提示词编译、角色圣经、任务轮询） |
+媒体工具须先由 [锁定源码](third_party/README.md) 构建；缺少匹配平台工具或校验失败会阻止打包。Linux 构建产物依赖本机构建的 glibc，当前在 Ubuntu 24.04 验证，不承诺较老发行版。最多 200 个片段、单段 600 秒、总长 7200 秒，单源 512 MiB、全部源 2 GiB；输出路径已存在则拒绝覆盖，取消/失败只清理本任务临时文件。安全发布使用硬链接原子保存，目标文件系统不支持时明确失败。
 
-### 项目结构
+在相应平台构建安装包：
 
-```
-moyin-creator/
-├── electron/              # Electron 主进程 + Preload
-│   ├── main.ts            # 主进程（存储管理、文件系统、协议处理）
-│   └── preload.ts         # 安全桥接层
-├── src/
-│   ├── components/        # React UI 组件
-│   │   ├── panels/        # 主面板（剧本、角色、场景、分镜、导演）
-│   │   └── ui/            # 基础 UI 组件库
-│   ├── stores/            # Zustand 全局状态
-│   ├── lib/               # 工具库（AI 调度、图片管理、路由）
-│   ├── packages/          # 内部包
-│   │   └── ai-core/       # AI 核心引擎
-│   └── types/             # TypeScript 类型定义
-├── build/                 # 构建资源（图标）
-└── scripts/               # 工具脚本
+```sh
+npm run build:win
+npm run build:mac:arm64
+npm run build:mac:x64
+npm run build:linux
 ```
 
-## 许可证
+平台命令只是构建入口，不代表安装包已完成构建、签名、公证或安装验证；以下载页公布的**实际验证证据**为准。macOS 签名/公证需要对应账户和构建环境；Windows 未签名程序可能出现系统信誉提示，不应鼓励绕过安全校验。
 
-本项目采用 **双重许可** 模式：
+## 初版验证边界
 
-### 开源使用 — AGPL-3.0
+没有用户 Key / 真实付费测试预算时，只做本地与模拟协议测试，不擅自使用保存的凭证。请勿据此宣称所有模型都实测可用。版本验证、可下载平台、源码归档校验和发布状态由最终交付证据说明，不能从配置存在推断。更新对话框只打开 YITOKEN 官网，由用户手动检查、下载和安装，不自动安装未知来源包。
 
-本项目以 [GNU AGPL-3.0](LICENSE) 许可证开源。你可以自由使用、修改和分发，但修改后的代码必须以相同许可证开源。
-
-### 商业使用
-
-如果你需要闭源使用或集成到商业产品中，请联系我们获取 [商业许可](COMMERCIAL_LICENSE.md)。
-
-## 贡献
-
-欢迎贡献！请阅读 [贡献指南](CONTRIBUTING.md) 了解详情。
-
-## 联系
-
-- 📧 Email: [memecalculate@gmail.com](mailto:memecalculate@gmail.com)
-- 🐙 GitHub: [https://github.com/MemeCalculate/moyin-creator](https://github.com/MemeCalculate/moyin-creator)
-
-### 联系我们
-
-
-
-<img src="https://github.com/user-attachments/assets/b82a1aab-0b57-4fe4-afec-0f4ff879d7c3" width="200" alt="交流群" />
-
-<img src="docs/images/wechat-contact.png" width="200" alt="微信联系" />
-
-
----
-
-<p align="center">Made with ❤️ by <a href="https://github.com/MemeCalculate">MemeCalculate</a></p>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+改动概览见 [CHANGELOG_RELEASE.md](CHANGELOG_RELEASE.md)。

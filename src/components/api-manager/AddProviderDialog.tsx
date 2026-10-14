@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { normalizeYitokenRoot } from "@/lib/ai/yitoken-client";
 import type { IProvider } from "@/lib/api-key-manager";
 
 /**
@@ -46,25 +47,9 @@ const PLATFORM_PRESETS: Array<{
   recommended?: boolean;
 }> = [
   {
-    platform: "memefast",
-    name: "魔因API",
-    baseUrl: "https://memefast.top",
-    description: "543+ 模型中转，支持 GPT/Claude/Gemini/DeepSeek/Veo/Sora 等",
-    services: ["对话", "图片生成", "视频生成", "图片理解"],
-    models: [
-      "deepseek-v3.2",
-      "glm-4.7",
-      "gemini-3-pro-preview",
-      "gemini-3-pro-image-preview",
-      "gpt-image-1.5",
-      "doubao-seedance-1-5-pro-251215",
-      "veo3.1",
-      "sora-2-all",
-      "wan2.6-i2v",
-      "grok-video-3-10s",
-      "claude-haiku-4-5-20251001",
-    ],
-    recommended: true,
+    platform: "yitoken", name: "YITOKEN", baseUrl: "https://yitoken.com.cn",
+    description: "使用自己的 Key；Seedream 图片、Seedance 视频与对话，生成按官网价格计费",
+    services: ["对话", "图片生成", "视频生成"], models: ["gpt-6.1-sol", "seedream-5.0-lite", "seedance-2.0-mini"], recommended: true,
   },
   {
     platform: "runninghub",
@@ -154,23 +139,27 @@ export function AddProviderDialog({
       ? presetModels 
       : (model ? [model] : []);
     
+    let root = baseUrl.trim();
+    if (platform === "yitoken") {
+      try { root = normalizeYitokenRoot(root); } catch { toast.error("请输入有效的 HTTPS 根地址"); return; }
+    }
     onSubmit({
       platform,
       name: name.trim(),
-      baseUrl: baseUrl.trim(),
+      baseUrl: root,
       apiKey: apiKey.trim(),
       model: modelArray,
     });
 
     onOpenChange(false);
-    toast.success(isMemefastAppend ? `已追加 Key 到 ${name}` : `已添加 ${name}`);
+    toast.success(isYitokenAppend ? `已追加 Key 到 ${name}` : `已添加 ${name}`);
   };
 
   // Filter out already existing platforms (except custom and memefast which allow repeat add)
   const availablePlatforms = PLATFORM_PRESETS.filter(
-    (p) => p.platform === "custom" || p.platform === "memefast" || !existingPlatforms.includes(p.platform)
+    (p) => p.platform === "custom" || p.platform === "yitoken" || !existingPlatforms.includes(p.platform)
   );
-  const isMemefastAppend = platform === "memefast" && existingPlatforms.includes("memefast");
+  const isYitokenAppend = platform === "yitoken" && existingPlatforms.includes("yitoken");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -238,7 +227,7 @@ export function AddProviderDialog({
               className="font-mono"
             />
             <p className="text-xs text-muted-foreground">
-              支持多个 Key，用逗号分隔
+              支持多个自有 Key，用逗号分隔。请勿粘贴运营方共享 Key。
             </p>
           </div>
 
@@ -257,7 +246,7 @@ export function AddProviderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button onClick={handleSubmit}>{isMemefastAppend ? "追加 Key" : "添加"}</Button>
+          <Button onClick={handleSubmit}>{isYitokenAppend ? "追加 Key" : "添加"}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

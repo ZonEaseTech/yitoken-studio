@@ -38,6 +38,7 @@ export interface IProvider {
  * 2. RunningHub - 视角切换/多角度生成
  */
 export const DEFAULT_PROVIDERS: Omit<IProvider, 'id' | 'apiKey'>[] = [
+  { platform: 'yitoken', name: 'YITOKEN', baseUrl: 'https://yitoken.com.cn', model: ['gpt-6.1-sol', 'seedream-5.0-lite', 'seedance-2.0-mini'], capabilities: ['text', 'image_generation', 'video_generation'] },
   {
     platform: 'memefast',
     name: '魔因API',
@@ -135,6 +136,7 @@ const IMAGE_ENDPOINT_MAP: Record<string, ModelApiFormat> = {
 // MemeFast supported_endpoint_types 值 → 我们的视频 API 格式能力分类
 // 注意：这里统一映射为 'openai_video' 仅表示「视频生成能力」，实际 API 路由由 use-video-generation.ts 中的 VIDEO_FORMAT_MAP 决定
 const VIDEO_ENDPOINT_MAP: Record<string, ModelApiFormat> = {
+  'openai-video': 'openai_video',
   '视频统一格式': 'openai_video',
   'openAI视频格式': 'openai_video',
   'openAI官方视频格式': 'openai_video',

@@ -27,6 +27,7 @@ interface PreviewStore {
   setPlaylist: (items: PreviewItem[], startIndex?: number) => void;
   playNext: () => void;
   clearPlaylist: () => void;
+  resetForProjectSwitch: () => void;
 }
 
 export const usePreviewStore = create<PreviewStore>((set, get) => ({
@@ -90,6 +91,11 @@ export const usePreviewStore = create<PreviewStore>((set, get) => ({
       // Playlist finished
       set({ isPlaying: false, currentIndex: 0 });
     }
+  },
+  resetForProjectSwitch: () => {
+    const { videoRef } = get();
+    if (videoRef) { videoRef.pause(); videoRef.currentTime = 0; }
+    set({ previewItem: null, playlist: [], currentIndex: 0, isPlaying: false, shouldAutoPlay: false, videoRef: null });
   },
   clearPlaylist: () => {
     set({ playlist: [], currentIndex: 0 });

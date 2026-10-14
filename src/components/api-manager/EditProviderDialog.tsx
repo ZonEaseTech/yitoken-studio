@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import type { IProvider } from "@/lib/api-key-manager";
+import { normalizeYitokenRoot } from "@/lib/ai/yitoken-client";
 import { getApiKeyCount } from "@/lib/api-key-manager";
 
 interface EditProviderDialogProps {
@@ -67,10 +68,14 @@ export function EditProviderDialog({
       .map(m => m.trim())
       .filter(m => m.length > 0);
 
+    let root = baseUrl.trim();
+    if (provider.platform === "yitoken") {
+      try { root = normalizeYitokenRoot(root); } catch { toast.error("请输入有效的 HTTPS 根地址"); return; }
+    }
     onSave({
       ...provider,
       name: name.trim(),
-      baseUrl: baseUrl.trim(),
+      baseUrl: root,
       apiKey: apiKey.trim(),
       model: models,
     });
@@ -130,7 +135,7 @@ export function EditProviderDialog({
               className="font-mono text-sm min-h-[100px]"
             />
             <p className="text-xs text-muted-foreground">
-              💡 支持多个 Key 轮换使用，失败时自动切换到下一个
+              支持多个自有 Key。正式生成可能计费，网络异常不自动重复提交；请先到后台核对任务。
             </p>
           </div>
 

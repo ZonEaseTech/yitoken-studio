@@ -8,6 +8,7 @@
  * Features: smart endpoint routing, retry with exponential backoff
  */
 
+import { generateYitokenImage, generateYitokenVideo } from '@/lib/ai/yitoken-client';
 import {
   getAllFeatureConfigs,
   getFeatureConfig,
@@ -328,6 +329,7 @@ export async function generateFreedomImage(
   params: FreedomImageParams
 ): Promise<GenerationResult> {
   const { config } = resolveFreedomFeatureConfig('freedom_image', 'character_generation', params.model);
+  if (config?.platform === 'yitoken') return _generateFreedomImageInner(params);
   return freedomRetry(() => _generateFreedomImageInner(params), 'Image generation', config?.keyManager);
 }
 
@@ -352,6 +354,16 @@ async function _generateFreedomImageInner(
   // 模型 ID 直接透传：UI 选的就是供应商原始 ID，无需转换
   const model = params.model || defaultModel;
   const normalizedBase = baseUrl.replace(/\/+$/, '');
+  if (config.platform === 'yitoken') {
+    if (params.negativePrompt?.trim()) throw new Error('YITOKEN 首版尚未适配负向提示词，请写入正向提示词或清空该选项');
+    const [w, h] = (params.aspectRatio || '1:1').split(':').map(Number);
+    const scale = params.resolution === '4K' ? 4096 : 2048;
+    const width = params.width || Math.round(Math.sqrt(w / h) * scale / 8) * 8;
+    const height = params.height || Math.round(Math.sqrt(h / w) * scale / 8) * 8;
+    if (params.extraParams && Object.keys(params.extraParams).length) throw new Error('YITOKEN 首版不支持未验证的高级图片参数');
+    const result = await generateYitokenImage({ baseUrl, apiKey, model, prompt: params.prompt, size: `${width}x${height}` });
+    return { url: result.imageUrl, mediaId: saveToMediaLibrary(result.imageUrl, params.prompt, 'ai-image') };
+  }
 
   // ── Smart Routing: choose endpoint based on model metadata ──
   const endpointTypes = useAPIConfigStore.getState().modelEndpointTypes[model];
@@ -843,6 +855,7 @@ export async function generateFreedomVideo(
   params: FreedomVideoParams
 ): Promise<GenerationResult> {
   const { config } = resolveFreedomFeatureConfig('freedom_video', 'video_generation', params.model);
+  if (config?.platform === 'yitoken') return _generateFreedomVideoInner(params);
   return freedomRetry(() => _generateFreedomVideoInner(params), 'Video generation', config?.keyManager);
 }
 
@@ -866,6 +879,12 @@ async function _generateFreedomVideoInner(
   const apiKey = config.keyManager?.getCurrentKey?.() || config.apiKey;
   // 模型 ID 直接透传：UI 选的就是供应商原始 ID，无需转换
   const model = params.model || defaultModel;
+
+  if (config.platform === 'yitoken') {
+    const images = await Promise.all((params.uploadFiles || []).map(async file => ({ url: await uploadBase64Image(file.dataUrl), role: file.role === 'last' ? 'last_frame' as const : file.role === 'reference' ? 'reference_image' as const : 'first_frame' as const })));
+    const result = await generateYitokenVideo({ baseUrl, apiKey, model, prompt: params.prompt, duration: params.duration, aspectRatio: params.aspectRatio, resolution: params.resolution, images });
+    return { ...result, mediaId: saveToMediaLibrary(result.url, params.prompt, 'ai-video') };
+  }
 
   const endpointTypes = useAPIConfigStore.getState().modelEndpointTypes[model];
   const route = detectFreedomVideoRoute(model, endpointTypes);

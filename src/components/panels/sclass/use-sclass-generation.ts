@@ -100,11 +100,12 @@ export function useSClassGeneration() {
   /** 将 @引用中的图片 URL 转为 HTTP URL */
   const prepareImageUrls = useCallback(
     async (
-      refs: AssetRef[]
-    ): Promise<Array<{ url: string; role: "first_frame" | "last_frame" }>> => {
+      refs: AssetRef[],
+      platform?: string,
+    ): Promise<Array<{ url: string; role: "first_frame" | "last_frame" | "reference_image" }>> => {
       const imageWithRoles: Array<{
         url: string;
-        role: "first_frame" | "last_frame";
+        role: "first_frame" | "last_frame" | "reference_image";
       }> = [];
 
       for (let i = 0; i < refs.length; i++) {
@@ -113,11 +114,12 @@ export function useSClassGeneration() {
           fallbackHttpUrl: ref.httpUrl,
           uploadName: ref.fileName,
         });
+        if (!httpUrl) throw new Error(`参考素材 ${ref.fileName} 无法读取或上传，已停止生成`);
         if (httpUrl) {
-          // 第一张图作为 first_frame，其余作为 last_frame
+          // Explicit references keep their intended purpose in the YITOKEN protocol.
           imageWithRoles.push({
             url: httpUrl,
-            role: i === 0 ? "first_frame" : "last_frame",
+            role: platform === "yitoken" ? (ref.purpose === "first_frame" ? "first_frame" : "reference_image") : (i === 0 ? "first_frame" : "last_frame"),
           });
         }
       }
@@ -306,24 +308,33 @@ export function useSClassGeneration() {
         }
 
         // 5. 收集图片引用 → 转 HTTP URL
-        const imageRefs = promptResult.refs.images;
-        const imageWithRoles = await prepareImageUrls(imageRefs);
+        const imageRefs = [...promptResult.refs.images];
+        if (featureConfig.platform === 'yitoken') {
+          for (const ref of group.imageRefs || []) {
+            if (!imageRefs.some(existing => existing.localUrl === ref.localUrl)) imageRefs.push(ref);
+          }
+          if (imageRefs.length > SEEDANCE_LIMITS.maxImages || promptResult.refs.overLimit) throw new Error('参考素材数量超出当前协议限制，请先减少素材');
+        }
+        const imageWithRoles = await prepareImageUrls(imageRefs, featureConfig.platform);
 
         // 5b. 收集视频/音频引用 → 转 HTTP URL（Seedance 2.0 多模态输入）
         const videoRefUrls: string[] = [];
         // 前组视频衔接（链式重试时传入）— 延长/编辑组已在 refs.videos 中携带 sourceVideoUrl，跳过
         if (!isExtendOrEdit && options?.prevVideoUrl) {
-          const prevHttpUrl = await convertToHttpUrl(options.prevVideoUrl).catch(() => "");
-          if (prevHttpUrl) videoRefUrls.push(prevHttpUrl);
+          const prevHttpUrl = await convertToHttpUrl(options.prevVideoUrl);
+          if (!prevHttpUrl) throw new Error("衔接视频素材无法读取或上传，已停止生成");
+          videoRefUrls.push(prevHttpUrl);
         }
         for (const vRef of promptResult.refs.videos) {
-          const httpUrl = vRef.httpUrl || (await convertToHttpUrl(vRef.localUrl).catch(() => ""));
-          if (httpUrl) videoRefUrls.push(httpUrl);
+          const httpUrl = vRef.httpUrl || (await convertToHttpUrl(vRef.localUrl));
+          if (!httpUrl) throw new Error(`视频素材 ${vRef.fileName} 无法读取或上传，已停止生成`);
+          videoRefUrls.push(httpUrl);
         }
         const audioRefUrls: string[] = [];
         for (const aRef of promptResult.refs.audios) {
-          const httpUrl = aRef.httpUrl || (await convertToHttpUrl(aRef.localUrl).catch(() => ""));
-          if (httpUrl) audioRefUrls.push(httpUrl);
+          const httpUrl = aRef.httpUrl || (await convertToHttpUrl(aRef.localUrl));
+          if (!httpUrl) throw new Error(`音频素材 ${aRef.fileName} 无法读取或上传，已停止生成`);
+          audioRefUrls.push(httpUrl);
         }
 
         updateGroupVideoStatus(group.id, { videoProgress: 10 });
@@ -349,7 +360,7 @@ export function useSClassGeneration() {
           videoResolution,
         });
 
-        const maxVideoAttempts = Math.max(1, Math.min(keyManager.getTotalKeyCount(), 6));
+        const maxVideoAttempts = featureConfig.platform === 'yitoken' ? 1 : Math.max(1, Math.min(keyManager.getTotalKeyCount(), 6));
         let videoUrl: string | null = null;
         let lastVideoError: Error | null = null;
 
@@ -382,7 +393,8 @@ export function useSClassGeneration() {
             lastVideoError = null;
             break;
           } catch (error) {
-            const err = error as Error & { status?: number };
+            const err = error as Error & { status?: number; retrySafe?: boolean };
+            if (err.retrySafe === false) throw err;
             lastVideoError = err;
             const message = err.message || "";
             const statusMatch = message.match(/\b(4\d\d|5\d\d)\b/);
@@ -643,7 +655,7 @@ export function useSClassGeneration() {
           `分镜 ${scene.id + 1} 视频`;
         const duration = Math.max(4, Math.min(15, scene.duration || 5));
 
-        const maxVideoAttempts = Math.max(1, Math.min(keyManager.getTotalKeyCount(), 6));
+        const maxVideoAttempts = featureConfig.platform === 'yitoken' ? 1 : Math.max(1, Math.min(keyManager.getTotalKeyCount(), 6));
         let videoUrl: string | null = null;
         let lastVideoError: Error | null = null;
 
@@ -668,7 +680,8 @@ export function useSClassGeneration() {
             lastVideoError = null;
             break;
           } catch (error) {
-            const err = error as Error & { status?: number };
+            const err = error as Error & { status?: number; retrySafe?: boolean };
+            if (err.retrySafe === false) throw err;
             lastVideoError = err;
             const message = err.message || "";
             const statusMatch = message.match(/\b(4\d\d|5\d\d)\b/);

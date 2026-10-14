@@ -22,19 +22,13 @@ import { TaskPoller } from '@opencut/ai-core/api/task-poller';
 const WORKER_VERSION = '0.3.1';
 
 // Base URL for API requests (passed from main thread)
-let apiBaseUrl = '';
+let apiBaseUrl = 'https://yitoken.com.cn';
 
 // Helper to build API URL
-function buildApiUrl(path: string): string {
-  if (apiBaseUrl) {
-    return `${apiBaseUrl}${path}`;
-  }
-  // Fallback: try to get from location if available
-  if (typeof self !== 'undefined' && (self as any).location?.origin) {
-    return `${(self as any).location.origin}${path}`;
-  }
-  // Last resort: use relative URL (may not work in all workers)
-  return path;
+function buildApiUrl(_path: string): never {
+  // Upstream expected a separate Next.js /api/ai server, absent from this desktop.
+  // Never send credentials to a guessed route or pretend it is the YITOKEN API.
+  throw new Error('旧版后台生成工作流尚未接入 YITOKEN，请使用导演面板的模型生成入口；不会提交请求或扣费');
 }
 
 // API Response types
@@ -152,7 +146,6 @@ async function handleGenerateScreenplay(command: GenerateScreenplayCommand): Pro
   const { prompt, referenceImages, config } = command.payload;
   
   console.log('[AI Worker] Generating screenplay for prompt:', prompt.substring(0, 100));
-  console.log('[AI Worker] Config received:', JSON.stringify(config, null, 2));
   
   try {
     // Check for mock mode
@@ -166,7 +159,7 @@ async function handleGenerateScreenplay(command: GenerateScreenplayCommand): Pro
     // Note: API key should be passed from main thread in config
     // The main thread gets it from useAPIConfigStore
     const apiKey = (config as any).apiKey || '';
-    const provider = (config as any).chatProvider || 'memefast';
+    const provider = (config as any).chatProvider || 'yitoken';
     const sceneCount = config.sceneCount || 5;
     
     console.log('[AI Worker] Using sceneCount:', sceneCount);
@@ -194,7 +187,6 @@ async function handleGenerateScreenplay(command: GenerateScreenplayCommand): Pro
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       const errorMsg = errorData.message || errorData.error || `API request failed: ${response.status}`;
-      console.error('[AI Worker] Screenplay API error:', response.status, errorData);
       throw new Error(errorMsg);
     }
     
@@ -231,7 +223,7 @@ async function generateImage(
   referenceImages?: string[]
 ): Promise<string> {
   const apiKey = config.apiKey || (config as any).imageApiKey || '';
-  const provider = (config as any).imageProvider || 'memefast';
+  const provider = (config as any).imageProvider || 'yitoken';
   
   if (!apiKey) {
     throw new Error('未配置图片生成 API Key');
@@ -255,7 +247,6 @@ async function generateImage(
   if (!submitResponse.ok) {
     const errorData = await submitResponse.json().catch(() => ({}));
     const errorMsg = errorData.message || errorData.error || `Image API request failed: ${submitResponse.status}`;
-    console.error('[AI Worker] Image API error:', submitResponse.status, errorData);
     throw new Error(errorMsg);
   }
   
@@ -287,7 +278,7 @@ async function generateVideo(
   referenceImages?: string[]
 ): Promise<string> {
   const apiKey = config.apiKey || (config as any).videoApiKey || '';
-  const provider = (config as any).videoProvider || 'memefast';
+  const provider = (config as any).videoProvider || 'yitoken';
   
   if (!apiKey) {
     throw new Error('未配置视频生成 API Key');
@@ -365,7 +356,6 @@ async function pollTaskCompletion(
     
     const statusData: TaskStatusResponse = await statusResponse.json();
     
-    console.log(`[AI Worker] Task ${taskId} status:`, statusData.status, statusData.error ? `error: ${JSON.stringify(statusData.error)}` : '');
     
     // Report progress if available
     if (statusData.progress && onProgress) {
@@ -390,7 +380,7 @@ async function pollTaskCompletion(
         if (statusData.error) {
           errorMsg = typeof statusData.error === 'string' 
             ? statusData.error 
-            : JSON.stringify(statusData.error);
+            : '后台任务失败';
         }
         throw new Error(errorMsg);
         
@@ -465,7 +455,6 @@ async function handleExecuteScene(command: ExecuteSceneCommand): Promise<void> {
     );
     
     reportSceneProgress(screenplayId, scene.sceneId, 'generating', 'image', 45);
-    console.log('[AI Worker] Image generated:', imageUrl);
     
     // ========== Stage 2: Video Generation ==========
     const videoPrompt = promptCompiler.compileSceneVideoPrompt(scene, characters);
@@ -487,7 +476,6 @@ async function handleExecuteScene(command: ExecuteSceneCommand): Promise<void> {
       refImages // Character reference images
     );
     
-    console.log('[AI Worker] Video generated:', videoUrl);
     
     // ========== Stage 3: Download and Create Blob ==========
     reportSceneProgress(screenplayId, scene.sceneId, 'generating', 'video', 95);
@@ -598,9 +586,9 @@ async function handleExecuteScreenplay(command: { type: string; payload: { scree
   // Prepare extended config with API keys
   const extendedConfig = {
     ...config,
-    apiKey: apiKeys.memefast || '',
-    imageApiKey: apiKeys.memefast || '',
-    videoApiKey: apiKeys.memefast || '',
+    apiKey: apiKeys.yitoken || '',
+    imageApiKey: apiKeys.yitoken || '',
+    videoApiKey: apiKeys.yitoken || '',
     mockImage,
     mockVideo,
     characterReferenceImages,
@@ -671,11 +659,9 @@ async function handleExecuteScreenplayImages(command: { type: string; payload: {
   const apiKeys = (config as any).apiKeys || {};
   const concurrency = config.concurrency || 1;
   
-  console.log('[AI Worker] Config apiKeys:', JSON.stringify(apiKeys));
-  console.log('[AI Worker] Config keys:', Object.keys(config as any));
   
   // Validate API key (required for image generation)
-  const imageKey = apiKeys.memefast || '';
+  const imageKey = apiKeys.yitoken || '';
   if (!imageKey && !mockImage) {
     console.error('[AI Worker] Image API Key not configured');
     postEvent({
@@ -698,7 +684,6 @@ async function handleExecuteScreenplayImages(command: { type: string; payload: {
   // Get character reference images from config
   const characterReferenceImages = (config as any).characterReferenceImages || [];
   console.log(`[AI Worker] Using ${characterReferenceImages.length} character reference images`);
-  console.log(`[AI Worker] Image API Key: ${imageKey ? imageKey.substring(0, 10) + '...' : 'NOT SET'}`);
   
   // Prepare extended config with API keys
   const extendedConfig = {
@@ -762,10 +747,6 @@ async function handleExecuteScreenplayVideos(command: { type: string; payload: {
 
   console.log(`[AI Worker] Generating videos for screenplay ${screenplay.id} with ${screenplay.scenes.length} scenes`);
   
-  // Debug: Log each scene's imageUrl
-  for (const scene of screenplay.scenes) {
-    console.log(`[AI Worker] Scene ${scene.sceneId} imageUrl: ${scene.imageUrl || 'NOT SET'}`);
-  }
   
   // Set baseUrl if provided
   if ((config as any).baseUrl) {
@@ -785,8 +766,8 @@ async function handleExecuteScreenplayVideos(command: { type: string; payload: {
   // Prepare extended config with API keys
   const extendedConfig = {
     ...config,
-    apiKey: apiKeys.memefast || '',
-    videoApiKey: apiKeys.memefast || '',
+    apiKey: apiKeys.yitoken || '',
+    videoApiKey: apiKeys.yitoken || '',
     mockVideo,
     characterReferenceImages,
   };
@@ -914,7 +895,6 @@ async function generateSceneImageOnly(
       refImages
     );
     
-    console.log('[AI Worker] Image generated:', imageUrl);
     
     // Report image completed
     postEvent({
@@ -1014,7 +994,6 @@ async function generateSceneVideoOnly(
       refImages
     );
     
-    console.log('[AI Worker] Video generated:', videoUrl);
     
     // Download and create blob
     reportSceneProgress(screenplayId, scene.sceneId, 'generating', 'video', 95);
@@ -1135,7 +1114,6 @@ async function executeSceneInternal(
     );
     
     reportSceneProgress(screenplayId, scene.sceneId, 'generating', 'image', 45);
-    console.log('[AI Worker] Image generated:', imageUrl);
     
     // ========== Stage 2: Video Generation ==========
     const videoPrompt = promptCompiler.compileSceneVideoPrompt(scene, characters);
@@ -1156,7 +1134,6 @@ async function executeSceneInternal(
       refImages
     );
     
-    console.log('[AI Worker] Video generated:', videoUrl);
     
     // ========== Stage 3: Download and Create Blob ==========
     reportSceneProgress(screenplayId, scene.sceneId, 'generating', 'video', 95);

@@ -8,6 +8,8 @@
  */
 
 import { getFeatureConfig, getFeatureNotConfiguredMessage } from '@/lib/ai/feature-router';
+import { generateYitokenImage } from '@/lib/ai/yitoken-client';
+import { uploadBase64Image } from '@/lib/utils/image-upload';
 import { retryOperation } from '@/lib/utils/retry';
 import { resolveImageApiFormat } from '@/lib/api-key-manager';
 import { useAPIConfigStore } from '@/stores/api-config-store';
@@ -167,6 +169,16 @@ async function generateImage(
   const model = featureConfig.models?.[0];
   if (!apiKey || !baseUrl || !model) {
     throw new Error(getFeatureNotConfiguredMessage(feature));
+  }
+
+  if (featureConfig.platform === 'yitoken') {
+    if (params.negativePrompt?.trim()) throw new Error('YITOKEN 首版尚未适配负向提示词，请写入正向提示词或清空该选项');
+    const references = await Promise.all((params.referenceImages || []).map(uploadBase64Image));
+    const [w, h] = (params.aspectRatio || '1:1').split(':').map(Number);
+    const scale = (params.resolution || '2K') === '4K' ? 4096 : 2048;
+    const width = Math.round(Math.sqrt(w / h) * scale / 8) * 8;
+    const height = Math.round(Math.sqrt(h / w) * scale / 8) * 8;
+    return generateYitokenImage({ apiKey, baseUrl, model, prompt: params.prompt, size: `${width}x${height}`, referenceImages: references });
   }
 
   const aspectRatio = params.aspectRatio || '1:1';
@@ -791,6 +803,16 @@ export async function submitGridImageRequest(params: {
 }): Promise<{ imageUrl?: string; taskId?: string; pollUrl?: string }> {
   const { model, prompt, apiKey, baseUrl, aspectRatio, resolution, referenceImages, keyManager, signal } = params;
   const normalizedBase = baseUrl.replace(/\/+$/, '');
+  const yitokenProvider = useAPIConfigStore.getState().providers.find(provider => provider.platform === 'yitoken' && provider.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') === normalizedBase.replace(/\/v1$/, ''));
+  if (yitokenProvider) {
+    if (signal?.aborted) throw new Error('用户已取消');
+    const references = await Promise.all((referenceImages || []).map(uploadBase64Image));
+    const [w, h] = (aspectRatio || '1:1').split(':').map(Number);
+    const scale = resolution === '4K' ? 4096 : 2048;
+    const width = Math.round(Math.sqrt(w / h) * scale / 8) * 8;
+    const height = Math.round(Math.sqrt(h / w) * scale / 8) * 8;
+    return generateYitokenImage({ apiKey, baseUrl, model, prompt, size: `${width}x${height}`, referenceImages: references, signal });
+  }
 
   // 检测 API 格式（与 generateImage 一致）
   const endpointTypes = useAPIConfigStore.getState().modelEndpointTypes[model];
