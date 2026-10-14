@@ -51,6 +51,7 @@ Actions / Unsigned desktop prerelease / Run workflow（选择 main）
 - macOS 首轮在导入 FFmpeg 公钥时失败：默认工作区太长，隔离 GnuPG home 下的 agent 额外 Unix socket 路径达到或超过 macOS 的 104 字节容量。桌面矩阵现在将刚检出的冻结源码物理复制到独占的 `/tmp/yitoken-desktop` 后构建（macOS 实际为 `/private/tmp/yitoken-desktop`）；目标存在即失败，不复用、不覆盖。应用提交身份检查、媒体源码 SHA256、GPG 签名及签名指纹检查全部保留。
 - Windows/Linux 首轮已生成安装文件，但锁定的 electron-builder 根据 CI 环境隐式尝试自行发布，因没有 `GH_TOKEN` 失败。只在打包子进程使用 `env -u GITHUB_REF_TYPE CI=false`，同时关闭 CI 和 tag 两种隐式发布推断；测试步骤仍在真实 CI 环境下执行，之后的来源清单和最终发布步骤仍使用真实 GitHub 上下文。没有给桌面构建添加 token、写权限，也没有修改冻结打包脚本。
 - 本次只修改流水线及本说明，冻结应用 tag、398 个应用源码文件、完整对应源码包及其 SHA256 不变。是否已解决仍须以修复后的四平台真实流水线终态为准。
+- 四平台重跑 `38543823880` 全部成功并公开预发布。独立下载核验又发现 GitHub 将 Linux 文件名中的空格转换为点，导致旧清单的文件名不匹配（安装文件字节及 SHA256 正确）。收集步骤现先规范公共 ASCII 文件名，再复制/生成来源与校验清单。Alpha1 已有 13 件资产保留、不覆盖，另附 `BUILD-PROVENANCE-linux-x64-GITHUB.json`（仅修正下载文件名并说明映射）和 `SHA256SUMS-GITHUB.txt`（按实际公开文件名校验 14 个其它附件），不会重新构建或替换旧安装包。
 
 ## 本机 macOS 构建
 
@@ -93,7 +94,7 @@ npm run release:source
 ## 下载、安装和验收
 
 1. 到 GitHub Releases 选择对应版本和架构：Windows x64 `.exe`；Linux x64 `.AppImage`；Apple Silicon macOS `arm64` 或 Intel macOS `x64` 的 `.dmg` / `.zip`。
-2. 同时下载 `SHA256SUMS.txt` 与对应源码。Linux 用 `sha256sum <文件>`，macOS 用 `shasum -a 256 <文件>`，Windows PowerShell 用 `Get-FileHash <文件> -Algorithm SHA256`，核对清单。
+2. 同时下载校验清单与对应源码；Alpha1 使用修正附件 `SHA256SUMS-GITHUB.txt`（原 `SHA256SUMS.txt` 保留审计，不要用于按下载文件名批量核验），后续版本使用 `SHA256SUMS.txt`。Linux 用 `sha256sum <文件>`，macOS 用 `shasum -a 256 <文件>`，Windows PowerShell 用 `Get-FileHash <文件> -Algorithm SHA256`，核对清单。
 3. Windows 按安装向导选择目录；macOS 从 DMG/ZIP 把应用移到自己的 `~/Applications`；Linux 给 AppImage 执行权限后运行。Linux 图形桌面、FUSE/发行版依赖和系统兼容性需另行核验。
 4. 这是**无签名、无公证的预发布**，可能触发 SmartScreen/Gatekeeper。不要关闭系统保护，不执行来源不明的去隔离或免杀脚本；如安全策略拒绝，停止并等待已签名版本。
 5. 应用自带源代码编译的 FFmpeg/x264 及第三方来源材料；API Key 由使用者自行配置，不包含开发者或运营方密钥。当前应用中的官网更新/下载配置未改为 GitHub 自动更新；本轮不发布或修改官网服务。

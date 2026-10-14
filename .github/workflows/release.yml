@@ -250,12 +250,19 @@ jobs:
           }
           const resourceManifest = JSON.parse(readFileSync(join(resources, 'DESKTOP-RESOURCE-PROVENANCE.json'), 'utf8'));
           if (resourceManifest.applicationVersion !== version || resourceManifest.mediaTarget !== target) throw new Error('Packaged resource identity mismatch');
+          // GitHub replaces spaces/special characters in uploaded asset names.
+          // Freeze public names before checksums/provenance, not after uploading.
+          const publicNames = files.map(file => file.name.replace(/[^A-Za-z0-9._-]/g, '.'));
+          if (new Set(publicNames).size !== files.length || publicNames.some(name => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name))) {
+            throw new Error('Unsafe or colliding public installer filename');
+          }
           const artifactDir = join(process.env.RUNNER_TEMP, `release-${platform}-${arch}`);
           mkdirSync(artifactDir);
-          const assets = files.map(file => {
+          const assets = files.map((file, index) => {
             const data = readFileSync(join(directory, file.name));
-            copyFileSync(join(directory, file.name), join(artifactDir, file.name));
-            return {filename: file.name, sha256: createHash('sha256').update(data).digest('hex')};
+            const filename = publicNames[index];
+            copyFileSync(join(directory, file.name), join(artifactDir, filename));
+            return {filename, sha256: createHash('sha256').update(data).digest('hex')};
           });
           writeFileSync(join(artifactDir, `BUILD-PROVENANCE-${platform}-${arch}.json`), JSON.stringify({
             product: 'YITOKEN Studio', version, platform, arch, sourceTag: process.env.SOURCE_TAG,
