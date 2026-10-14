@@ -1,0 +1,7 @@
+{
+  "version": "0.1.0-alpha.1",
+  "release_tag": "v0.1.0-alpha.1",
+  "channel": "alpha",
+  "signed": false,
+  "notarized": false
+}

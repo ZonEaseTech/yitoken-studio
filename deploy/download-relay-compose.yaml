@@ -1,0 +1,32 @@
+# Standalone project: never run the existing main-site compose for this service.
+services:
+  download-relay:
+    image: ${YITOKEN_DOWNLOAD_RELAY_IMAGE:?Set the exact locally built relay image tag}
+    container_name: yitoken-download-relay
+    restart: unless-stopped
+    user: '10001:10001'
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 96
+    mem_limit: 128m
+    cpus: 1
+    healthcheck:
+      test: [CMD, /bin/busybox, wget, -q, --spider, 'http://127.0.0.1:8080/healthz']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: '2'
+    networks:
+      site:
+        aliases: [download-relay]
+    # Intentionally no host ports, secrets, bind mounts, or installer cache.
+networks:
+  site:
+    external: true
+    name: yitoken_yitoken-net
