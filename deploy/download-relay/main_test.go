@@ -251,8 +251,26 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 			t.Errorf("invalid cache-buster %s: status=%d", path, w.Code)
 		}
 	}
-	b, _ := os.ReadFile("index.html")
-	page := string(b)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/", nil))
+	page := w.Body.String()
+	if strings.Count(page, `<article class="card">`) != 4 || strings.Contains(page, "同版本完整客户端源码") {
+		t.Error("download grid must contain only the four platform installer cards")
+	}
+	for _, name := range []string{
+		"yitoken-studio-0.1.0-alpha.1-setup.exe", "YITOKEN.Studio-0.1.0-alpha.1.AppImage",
+		"yitoken-studio-0.1.0-alpha.1-arm64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-arm64-mac.zip",
+		"yitoken-studio-0.1.0-alpha.1-x64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-x64-mac.zip",
+	} {
+		if !strings.Contains(page, `class="button" href="/downloads/assets/`+name+`"`) {
+			t.Errorf("missing installer download %s", name)
+		}
+	}
+	for _, path := range []string{"/downloads/assets/yitoken-studio-0.1.0-alpha.1-source.tar.gz", "/downloads/relay-source.tar.gz"} {
+		if !strings.Contains(page, `<a href="`+path+`">`) {
+			t.Errorf("source must remain available as a text link, not an installer card: %s", path)
+		}
+	}
 	for _, want := range []string{"Windows x64", "Linux x64", "macOS Apple Silicon", "macOS Intel", "SHA256SUMS-GITHUB.txt", "/downloads/relay-source.tar.gz", "Moyin Creator", "/keys"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("missing page %s", want)
