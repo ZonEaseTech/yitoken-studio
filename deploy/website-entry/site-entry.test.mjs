@@ -83,7 +83,9 @@ after(async () => {
   socket?.close();
   if (browser && browser.exitCode === null) { const exit = new Promise(resolve => browser.once('exit', resolve)); browser.kill('SIGTERM'); await exit; }
   if (server) await new Promise(resolve => server.close(resolve));
-  if (profile) await rm(profile, { recursive: true, force: true });
+  // CI observed ENOTEMPTY while Chrome finished writing its isolated Default profile.
+  // Bound cleanup retries to this owned directory; persistent failures still fail the hook.
+  if (profile) await rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 test('guests get native desktop and mobile download links without replacing existing navigation', async () => {
   await navigate();
@@ -245,6 +247,9 @@ test('cross-origin studio iframe normal click performs native same-tab top-level
   await waitFor(`document.querySelector('[data-yitoken-studio-guide]')`, sessionId);
   const before=(await send('Target.getTargets')).targetInfos.filter(t=>t.type==='page').length;
   const prior=networkRequests.length;
+  // Child DOM readiness alone does not establish a visibly painted OOPIF surface.
+  // Capture the parent surface before the one trusted click; do not retry input.
+  await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
   const position=await evaluate(`(()=>{const r=document.querySelector('[data-yitoken-studio-guide]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`,sessionId);
   await send('Input.dispatchMouseEvent',{type:'mousePressed',...position,button:'left',clickCount:1});
   await send('Input.dispatchMouseEvent',{type:'mouseReleased',...position,button:'left',clickCount:1});
