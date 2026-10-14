@@ -100,7 +100,13 @@ func (h *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Never clean or decode a user-selected path into a different allowlisted file.
-	if r.URL.RawQuery != "" || r.URL.ForceQuery || r.URL.RawPath != "" || strings.Contains(r.URL.EscapedPath(), "%") {
+	queryAllowed := r.URL.RawQuery == ""
+	if timestamp, ok := strings.CutPrefix(r.URL.RawQuery, "_ts="); r.URL.Path == "/downloads/version.json" && ok && len(timestamp) > 0 && len(timestamp) <= 16 {
+		// The frozen client adds a decimal cache-buster. This local-only exception
+		// never selects an upstream or applies to installation-file requests.
+		queryAllowed = !strings.ContainsFunc(timestamp, func(c rune) bool { return c < '0' || c > '9' })
+	}
+	if !queryAllowed || r.URL.ForceQuery || r.URL.RawPath != "" || strings.Contains(r.URL.EscapedPath(), "%") {
 		writeError(w, r, 400, "invalid download request")
 		return
 	}

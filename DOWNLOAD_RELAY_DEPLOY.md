@@ -36,6 +36,7 @@ handle /downloads/* {
 - 不使用 `curl -L` 掩盖跳转，官网页面/附件应直接200或206，无GitHub Location或上游Set-Cookie；`/downloads` 仅同域308到带尾斜杠的下载页。
 - 15个附件HEAD逐件比固定大小、名称与Disposition。真实小附件与至少一个完整Mac安装包必须按SHA核验，不只测试HTTP200；发送 Accept-Encoding 检查未压缩。
 - 小文件两段Range拼接后SHA与完整文件相同；非法Range明确416。任意URL参数、未知附件、编码路径、POST与源码目录探测明确4xx，不返回主站伪成功页面。
+- 检查更新兼容：本地 `/downloads/version.json?_ts=1791974197000` 应直接200并与不带参数的JSON一致；只有一个1至16位数字 `_ts` 被接受，不接受URL、重复参数或附件上的查询。冻结Electron客户端及其API源/Key规则不改。
 - 本地回归覆盖容量8、取消、上游错误、重定向白名单、错误Content-Length/Content-Range等；不要在生产压测8路大文件。
 - 原首页/keys/pricing/about/source内容SHA和API/支付/docs/统计服务可用性与发布前基线比较。不得用付费生成或修改生产数据做验证。
 - 实时链路仍依赖GitHub，消耗服务器带宽；并发限制不是带宽配额，不承诺所有国内网络的速度。无签名/无公证与平台安装未认证的预发布风险仍在。

@@ -12,6 +12,7 @@
 
 - 独立部署源码放 `deploy/download-relay/`，独立 Go 模块，不依赖 new-api；现有客户端 tag/source 均不变。
 - 固定 `ZonEaseTech/yitoken-studio` / `v0.1.0-alpha.1` 的 15 个真实公开附件与大小/SHA256，不接受任意 URL、仓库、版本、路径或查询。
+- 唯一查询兼容：冻结客户端检查更新会添加 `_ts=Date.now()`；仅本地 `/downloads/version.json` 接受一个字面量 `_ts=` 加1至16位十进制数字，其它参数/重复/编码/空值及所有附件查询仍拒绝，绝不向GitHub传递这个参数。
 - 服务端处理最多 5 次重定向，只允许 HTTPS GitHub/Release 资产主机，拒绝用户信息、非443端口和站外/内网目标；绝不转发用户 Cookie、Authorization 或 API Key，不返回上游 Location/Set-Cookie。
 - 仅 GET/HEAD；单区间 Range，明确校验200/206的长度与Content-Range；不符合协议或上游失败在发正文前502，不伪装成功；客户端断开取消上游请求。最多8个同时中转，超限503，连接/响应头/全任务均有超时。
 - 静态网页复用现有下载模板视觉与业务文案，只纠正已完成的 Mac 构建事实；清楚区分四个平台，提供AGPL源码/许可/修正校验附件，提醒未签名、未公证、真实付费生成/原生Windows安装未认证。

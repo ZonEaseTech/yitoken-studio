@@ -230,6 +230,27 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 			}
 		}
 	}
+	// The frozen Electron updater always adds this cache-buster to version.json.
+	for _, method := range []string{"GET", "HEAD"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "/downloads/version.json?_ts=1791974197000", nil))
+		if w.Code != 200 || method == "GET" && !bytes.Equal(w.Body.Bytes(), versionDocument) || method == "HEAD" && w.Body.Len() != 0 {
+			t.Errorf("updater cache-buster %s: status=%d body=%q", method, w.Code, w.Body.String())
+		}
+	}
+	for _, path := range []string{
+		"/downloads/version.json?url=https://evil.invalid", "/downloads/version.json?_ts=1&_ts=2",
+		"/downloads/version.json?_ts=1&url=x", "/downloads/version.json?_ts=", "/downloads/version.json?_ts=-1",
+		"/downloads/version.json?_ts=12345678901234567", "/downloads/version.json?_ts=%31",
+		"/downloads/version.json?%5Fts=1", "/downloads/version.json?", "/downloads/?_ts=1",
+		"/downloads/assets/SHA256SUMS-GITHUB.txt?_ts=1",
+	} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		if w.Code != 400 {
+			t.Errorf("invalid cache-buster %s: status=%d", path, w.Code)
+		}
+	}
 	b, _ := os.ReadFile("index.html")
 	page := string(b)
 	for _, want := range []string{"Windows x64", "Linux x64", "macOS Apple Silicon", "macOS Intel", "SHA256SUMS-GITHUB.txt", "/downloads/relay-source.tar.gz", "Moyin Creator", "/keys"} {
