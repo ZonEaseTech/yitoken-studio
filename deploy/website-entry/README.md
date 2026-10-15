@@ -84,3 +84,7 @@ SEO helper 的首页导航（含 aria-label）、首页页脚和 FAQ 导航/页�
 自有首页 note 的七语言“预发布”字样移除，Windows/macOS/Linux 与 API Key 获取说明保留；SEO no-JS 自有说明同样移除此词。不同 URL 仍拒绝覆盖，既有 helper 只升级已知中文 note 字符串；真实版本/Release/manifest/安装包元数据不改，不把预发布安装包声称为稳定版。
 
 页面操作仍为：GPT按钮去原模型使用页（原登录/额度规则不变）；Studio按钮同标签页 Document GET `/downloads/`，不自动下载、不携带账户/Key。后端表字段、迁移、新 API 均为0。浏览器回归覆盖七语言 × 390/700/701/768/1024/1280/1920，包含精确stop恢复、未知原页面保护和后续class变化恢复；可用 `YITOKEN_SCREENSHOT_DIR=/tmp/owned-directory node --test site-entry.test.mjs` 导出本地fixture截图/几何日志。截图文件不是生产已上线证明，发布后仍需公开首页实测。
+
+### 2026-10-15 对齐修订：两张推广卡内容居中
+
+根据用户截图，将自有 `[data-yitoken-home-promos]` 内两张卡的标题、说明、按钮及小字改为水平居中。仅修改此 wrapper 的对齐 CSS；原双列等宽等高、700px及以下堆叠、垂直排布/留白/间距保持，原 GPT 节点/文案/地址与下载 `_self` 不变。此前章节的“左对齐”记录的是初版方案，本修订覆盖该对齐要求；其他首页区域、导航、业务逻辑和七语言文案不改。既有 compact 回归验证七语言各宽度的文字样式与两个按钮中心坐标，原19项浏览器业务断言和9项 Python 回归保留。

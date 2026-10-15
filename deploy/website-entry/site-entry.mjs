@@ -26,16 +26,16 @@ const css = `
 .ze [data-yitoken-download-card] .download-note{font-size:.88rem;color:var(--muted);margin-top:16px;overflow-wrap:anywhere}
 .ze [data-yitoken-download-card] .sub2{margin:14px auto 0}
 .ze [data-yitoken-download-card] .btn{white-space:normal;text-align:center;max-width:100%}
-.ze section[data-yitoken-home-promos]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;max-width:1080px;margin:24px auto 0;padding:0 24px;text-align:left}
-.ze [data-yitoken-home-promos] > .launch,.ze [data-yitoken-home-promos] .card{display:flex;flex-direction:column;align-items:flex-start;min-width:0;max-width:none;height:100%;margin:0;padding:24px;border-radius:16px;text-align:left;background:var(--soft);border:1px solid var(--line)}
+.ze section[data-yitoken-home-promos]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;max-width:1080px;margin:24px auto 0;padding:0 24px;text-align:center}
+.ze [data-yitoken-home-promos] > .launch,.ze [data-yitoken-home-promos] .card{display:flex;flex-direction:column;align-items:center;min-width:0;max-width:none;height:100%;margin:0;padding:24px;border-radius:16px;text-align:center;background:var(--soft);border:1px solid var(--line)}
 .ze [data-yitoken-home-promos] > [data-yitoken-download-card]{min-width:0;max-width:none;margin:0;padding:0}
-.ze [data-yitoken-home-promos] .launch-t,.ze [data-yitoken-home-promos] h2{font-size:22px;line-height:1.25;text-align:left;margin:0 0 12px}
-.ze [data-yitoken-home-promos] .launch-d,.ze [data-yitoken-home-promos] .sub2{font-size:15px;line-height:1.7;text-align:left;max-width:none;margin:0 0 16px}
-.ze [data-yitoken-home-promos] .kicker{font-size:13px;text-align:left;margin:0 0 8px}
-.ze [data-yitoken-home-promos] .btns{justify-content:flex-start;margin-top:auto;padding-top:0}
-.ze [data-yitoken-home-promos] .btn{font-size:14px;line-height:1.5;padding:10px 18px;border-radius:10px;max-width:100%;white-space:normal;text-align:left;overflow-wrap:anywhere}
+.ze [data-yitoken-home-promos] .launch-t,.ze [data-yitoken-home-promos] h2{font-size:22px;line-height:1.25;text-align:center;margin:0 0 12px}
+.ze [data-yitoken-home-promos] .launch-d,.ze [data-yitoken-home-promos] .sub2{font-size:15px;line-height:1.7;text-align:center;max-width:none;margin:0 0 16px}
+.ze [data-yitoken-home-promos] .kicker{font-size:13px;text-align:center;margin:0 0 8px}
+.ze [data-yitoken-home-promos] .btns{justify-content:center;margin-top:auto;padding-top:0}
+.ze [data-yitoken-home-promos] .btn{font-size:14px;line-height:1.5;padding:10px 18px;border-radius:10px;max-width:100%;white-space:normal;text-align:center;overflow-wrap:anywhere}
 .ze [data-yitoken-home-promos] > .launch > .btn{margin-top:auto}
-.ze [data-yitoken-home-promos] .download-note{font-size:12px;line-height:1.5;margin-top:12px;text-align:left}
+.ze [data-yitoken-home-promos] .download-note{font-size:12px;line-height:1.5;margin-top:12px;text-align:center}
 @media(max-width:700px){.ze section[data-yitoken-home-promos]{grid-template-columns:minmax(0,1fr);padding:0 20px}.ze [data-yitoken-home-promos] > .launch,.ze [data-yitoken-home-promos] .card{padding:20px}}
 
 `;
