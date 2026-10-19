@@ -6,8 +6,10 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -233,6 +235,13 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 			if method == "HEAD" && w.Body.Len() != 0 {
 				t.Error("local HEAD body")
 			}
+			if path == "/downloads/" {
+				// Only the embedded local screenshot may load; remote images and scripts stay denied.
+				wantCSP := "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+				if got := w.Header().Get("Content-Security-Policy"); got != wantCSP {
+					t.Errorf("%s page CSP: got %q, want %q", method, got, wantCSP)
+				}
+			}
 		}
 	}
 	// The frozen Electron updater always adds this cache-buster to version.json.
@@ -289,15 +298,55 @@ func TestDownloadPortalGuidance(t *testing.T) {
 	w := httptest.NewRecorder()
 	newRelay(productionClient(), nil).ServeHTTP(w, httptest.NewRequest("GET", "/downloads/", nil))
 	page := w.Body.String()
-	for _, want := range []string{`href="#platforms"`, `id="platforms"`, `id="usage-guide"`, "选择系统下载", "三步开始创作", "下载安装", "填写本人 Key", "创作并合成整片", "0.1.0-alpha.1", "AI 视频创作软件", "这是一款装在电脑上的 AI 视频创作软件", "编写剧本和分镜", "生成图片与视频片段", "在本地合成为完整 MP4", "自备 YITOKEN API Key", "主动生成按本人账户额度计费"} {
-		if !strings.Contains(page, want) {
-			t.Errorf("missing download guidance %s", want)
+	// Inline emphasis and line breaks may change without changing the approved visible message.
+	visibleText := html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(page, ""))
+	for _, want := range []string{"从剧本和分镜，到一部完整视频。", "选择系统下载", "选择你的版本", "第一次使用，三步就绪。", "安装桌面客户端", "填入自己的 API Key", "创作片段，导出整片", "0.1.0-alpha.1", "使用你自己获取的 API Key", "客户端不附赠运营方 Key", "主动 AI 生成按本人账户额度计费"} {
+		if !strings.Contains(visibleText, want) {
+			t.Errorf("missing visible download guidance %s", want)
 		}
 	}
+	for _, want := range []string{`href="#platforms"`, `id="platforms"`, `id="usage-guide"`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("missing download navigation %s", want)
+		}
+	}
+	t.Run("original screenshot", func(t *testing.T) {
+		images := regexp.MustCompile(`<img\b[^>]*>`).FindAllString(page, -1)
+		if len(images) != 1 {
+			t.Fatalf("download page must display one original client screenshot, got %d images", len(images))
+		}
+		image := images[0]
+		if !regexp.MustCompile(`\bclass="[^"]*\bd2-real-image\b[^"]*"`).MatchString(image) {
+			t.Error("original client screenshot must be the visible hero image")
+		}
+		if regexp.MustCompile(`(?i)\s(?:hidden(?:\s|=|>)|aria-hidden\s*=\s*["']true["'])|\b(?:display\s*:\s*none|visibility\s*:\s*hidden)`).MatchString(image) {
+			t.Error("original screenshot must not be hidden")
+		}
+		if !regexp.MustCompile(`\balt="[^"]+"`).MatchString(image) {
+			t.Error("client screenshot needs meaningful alternative text")
+		}
+		source := regexp.MustCompile(`\bsrc="data:image/jpeg;base64,([A-Za-z0-9+/=]+)"`).FindStringSubmatch(image)
+		if len(source) != 2 {
+			t.Fatal("original client screenshot must be a self-contained JPEG, not a remote image")
+		}
+		original, err := base64.StdEncoding.DecodeString(source[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		const originalSHA256 = "39effba03889a476fabc71d0b0fef00e7d57c3eb1075bccbf561dcad9b44c349"
+		if got := fmt.Sprintf("%x", sha256.Sum256(original)); got != originalSHA256 {
+			t.Errorf("client screenshot was altered: SHA256 %s, want %s", got, originalSHA256)
+		}
+		for _, folded := range regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`).FindAllString(page, -1) {
+			if strings.Contains(folded, image) {
+				t.Error("original client screenshot must be visible without opening disclosure panels")
+			}
+		}
+	})
 	if strings.Contains(page, "beta-pill") || strings.Contains(page, "预发布 · 非稳定版") || strings.Contains(page, "install-risk") || strings.Contains(page, "安装之前请知道") || strings.Contains(page, `class="notice"`) {
 		t.Error("removed installation and prerelease warning badges must not return")
 	}
-	for _, unwanted := range []string{"待批准", "PROPOSED LAYOUT", "方案注释", "studio-mock", "设计选择", "data-original-href", "<script", "<form", "未签名程序可能出现系统信誉提示", "不要关闭系统防护或绕过安全校验", "请先备份现有项目和素材"} {
+	for _, unwanted := range []string{"待批准", "PROPOSED LAYOUT", "方案注释", "studio-mock", "设计选择", "data-original-href", "data-prototype-installer", "<script", "<form", "未签名程序可能出现系统信誉提示", "不要关闭系统防护或绕过安全校验", "请先备份现有项目和素材"} {
 		if strings.Contains(page, unwanted) {
 			t.Errorf("public download page contains proposal or active content %s", unwanted)
 		}
@@ -306,9 +355,27 @@ func TestDownloadPortalGuidance(t *testing.T) {
 	if len(regexp.MustCompile(`<li\b[^>]*>`).FindAllString(steps, -1)) != 3 {
 		t.Error("usage guide must expose exactly three ordered steps")
 	}
+	stepText := html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(steps, ""))
+	previous := -1
+	for _, title := range []string{"安装桌面客户端", "填入自己的 API Key", "创作片段，导出整片"} {
+		position := strings.Index(stepText, title)
+		if position <= previous {
+			t.Errorf("usage guide must present %q in install, configure, create order", title)
+		}
+		previous = position
+	}
 	installerLinks := regexp.MustCompile(`<a\b[^>]*href="/downloads/assets/[^"/]+\.(?:exe|AppImage|dmg|zip)"[^>]*>`)
 	if len(installerLinks.FindAllString(page, -1)) != 6 {
 		t.Error("download page must offer exactly the six existing installer links")
+	}
+	for _, link := range installerLinks.FindAllString(page, -1) {
+		target := regexp.MustCompile(`(?i)\starget\s*=\s*["']([^"']*)["']`).FindStringSubmatch(link)
+		if regexp.MustCompile(`(?i)\sdownload(?:\s|=|>)`).MatchString(link) || len(target) == 2 && target[1] != "_self" {
+			t.Error("installer links must navigate in the current tab without automatic download attributes")
+		}
+	}
+	if regexp.MustCompile(`(?i)<meta\b[^>]*http-equiv\s*=\s*["']refresh["']|\son[a-z]+\s*=`).MatchString(page) {
+		t.Error("download page must not automatically navigate or execute event handlers")
 	}
 	cardInstallers := 0
 	for _, card := range regexp.MustCompile(`(?s)<article\b[^>]*>.*?</article>`).FindAllString(page, -1) {
@@ -343,7 +410,7 @@ func TestDownloadPortalGuidance(t *testing.T) {
 		"202,422,977 bytes", "193.0 MiB", "7b3ca84c609053df1d5d2baa45f1b0a3f9f4b10185ea7656c930cedf62fdce1c",
 		"202,608,058 bytes", "193.2 MiB", "cc221d8e6f6ad7fae19c95012cd310f4d0be20575485f8bd75245fbe8807d04c",
 		"默认 API 为 YITOKEN", "客户端不附赠运营方 Key", "本机拼接已有视频不新增 AI 生成费用",
-		`content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"`,
+		`content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"`,
 	} {
 		if !strings.Contains(page, metadata) {
 			t.Errorf("missing unchanged download metadata or policy %s", metadata)

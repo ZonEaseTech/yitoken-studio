@@ -1,5 +1,5 @@
 // YITOKEN changes: fail-closed, source-locked media resources for desktop packaging.
-import { readFile, writeFile, mkdir, lstat, mkdtemp, rename, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, mkdtemp, rename, readdir, realpath } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { collectProductionNotices } from './production-notices.mjs';
@@ -89,11 +89,13 @@ export async function prepareDesktopResources(root, target, applicationVersion, 
   const noticesFile = join(bundleDir, 'THIRD-PARTY-NOTICES.txt');
   await writeFile(noticesFile, notices, { flag: 'wx' });
   const resourceProvenanceFile = join(bundleDir, 'DESKTOP-RESOURCE-PROVENANCE.json');
-  await writeFile(resourceProvenanceFile, JSON.stringify({ applicationVersion, applicationLockSha256: digest(applicationLock), mediaTarget: target, ffmpegVersion: media.ffmpegVersion, x264Commit: media.x264Commit, mediaLockSha256: digest(media.lockBytes), artifacts: media.provenance.artifacts, sources: media.lock.sources, productionNoticesSha256: digest(notices), correspondingSource: 'Matching YITOKEN Studio source distribution includes third_party/sources and license/notices generators; these media source archives also accompany this application.' }, null, 2) + '\n', { flag: 'wx' });
+  await writeFile(resourceProvenanceFile, JSON.stringify({ applicationVersion, ...(target.startsWith('darwin-') ? { artifactHashScope: 'source-build-before-code-signing' } : {}), applicationLockSha256: digest(applicationLock), mediaTarget: target, ffmpegVersion: media.ffmpegVersion, x264Commit: media.x264Commit, mediaLockSha256: digest(media.lockBytes), artifacts: media.provenance.artifacts, sources: media.lock.sources, productionNoticesSha256: digest(notices), correspondingSource: 'Matching YITOKEN Studio source distribution includes third_party/sources and license/notices generators; these media source archives also accompany this application.' }, null, 2) + '\n', { flag: 'wx' });
   return { bundleDir, mediaDir, thirdPartyDir, noticesFile, resourceProvenanceFile };
 }
 /** Verify copied bytes, not just builder exit status or the pre-build cache. */
-export async function verifyPackagedDesktopResources(staging, target, snapshot) {
+export async function verifyPackagedDesktopResources(staging, target, snapshot, { signedMacMedia = false } = {}) {
+  if (signedMacMedia && !target.startsWith('darwin-')) throw new Error('Signed media exceptions are restricted to verified Darwin/Mac bundles');
+  if (signedMacMedia) await verifyMacPreSignProof(staging, target, snapshot);
   if (!supportedTargets.has(target)) throw new Error('Unsupported packaged media target');
   const [platform, arch] = target.split('-');
   const platformName = { linux: 'linux', win32: 'win', darwin: 'mac' }[platform];
@@ -124,9 +126,58 @@ export async function verifyPackagedDesktopResources(staging, target, snapshot) 
   }
   for (const file of files) {
     const original = await regularFile(file.source), copied = await regularFile(file.destination);
+    if (signedMacMedia && ['ffmpeg', 'ffprobe'].some(tool => file.source === join(snapshot.mediaDir, tool))) {
+      const cpu = target === 'darwin-arm64' ? 0x100000c : 0x1000007;
+      if (copied.length < 32 || copied.readUInt32LE(0) !== 0xfeedfacf || copied.readUInt32LE(4) !== cpu || copied.readUInt32LE(12) !== 2) throw new Error(`Signed media must remain a target-architecture Mach-O executable: ${file.destination}`);
+      continue; // Native signature verification is required by the caller before this opt-in.
+    }
     if (digest(original) !== digest(copied)) throw new Error(`Packaged resource checksum mismatch: ${file.destination}; staging retained, do not distribute`);
   }
   return resources;
+}
+// This proof records exact pre-sign bytes, outside the application bundle. It is
+// intentionally not a substitute for native codesign verification after signing.
+async function macPreSignProofIdentity(staging, target, snapshot) {
+  if (!['darwin-arm64', 'darwin-x64'].includes(target)) throw new Error('Mac pre-sign proof requires a supported Darwin target');
+  const manifest = JSON.parse((await regularFile(snapshot.resourceProvenanceFile)).toString());
+  if (manifest.mediaTarget !== target || manifest.artifactHashScope !== 'source-build-before-code-signing') throw new Error('Mac proof snapshot target/hash scope mismatch');
+  const stagingPath = await realpath(staging);
+  const unpacked = join(stagingPath, target === 'darwin-x64' ? 'mac' : 'mac-arm64');
+  const apps = (await readdir(unpacked, { withFileTypes: true })).filter(entry => entry.isDirectory() && entry.name.endsWith('.app'));
+  if (apps.length !== 1) throw new Error('Mac proof requires one application in the staging output');
+  const paths = {};
+  const files = [];
+  for (const name of ['mediaDir', 'thirdPartyDir', 'noticesFile', 'resourceProvenanceFile']) {
+    const input = snapshot[name];
+    if (typeof input !== 'string') throw new Error(`Missing snapshot path for Mac proof: ${name}`);
+    paths[name] = await realpath(input);
+    const queue = [{ path: input, name }];
+    for (const entry of queue) {
+      const stat = await lstat(entry.path);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) {
+        for (const child of (await readdir(entry.path)).sort()) queue.push({ path: join(entry.path, child), name: `${entry.name}/${child}` });
+      } else {
+        const bytes = await regularFile(entry.path);
+        files.push({ name: entry.name, sha256: digest(bytes) });
+      }
+    }
+  }
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  return { version: 1, staging: stagingPath, target, application: await realpath(join(unpacked, apps[0].name)), snapshotPaths: paths, snapshotSha256: digest(JSON.stringify(files)) };
+}
+export async function writeMacPreSignProof(staging, target, snapshot) {
+  await verifyPackagedDesktopResources(staging, target, snapshot);
+  const proof = await macPreSignProofIdentity(staging, target, snapshot);
+  await writeFile(join(proof.staging, 'MAC-PRE-SIGN-PROOF.json'), JSON.stringify(proof, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  return proof;
+}
+export async function verifyMacPreSignProof(staging, target, snapshot) {
+  const expected = await macPreSignProofIdentity(staging, target, snapshot);
+  const bytes = await regularFile(join(expected.staging, 'MAC-PRE-SIGN-PROOF.json'));
+  let proof;
+  try { proof = JSON.parse(bytes.toString()); } catch { throw new Error('Invalid Mac pre-sign proof JSON'); }
+  if (JSON.stringify(proof) !== JSON.stringify(expected)) throw new Error('Mac pre-sign proof does not match staging, target, application or snapshot hashes');
+  return proof;
 }
 export async function finalizeDesktopOutput(staging, destination) {
   const stat = await lstat(staging).catch(() => null);

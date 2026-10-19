@@ -136,7 +136,7 @@ export async function generateYitokenVideo(params: YitokenVideoRequest, options:
   }
   throw new YitokenSubmissionError(`查询超时，任务 ${taskId} 可能仍在执行。请到 YITOKEN 后台查询，不要重复提交。`, { taskId });
 }
-export async function generateYitokenImage(params: YitokenRequest & { size?: string; referenceImages?: string[] }): Promise<{ imageUrl: string }> {
+export async function generateYitokenImage(params: YitokenRequest & { size?: string; referenceImages?: string[]; negativePrompt?: string }): Promise<{ imageUrl: string }> {
   const root = normalizeYitokenRoot(params.baseUrl);
   if (!/^seedream-5\.0-(lite|pro)$/.test(params.model)) throw new Error('此图片模型的 YITOKEN 协议尚未适配');
   const size = params.size || '2048x2048';
@@ -145,7 +145,11 @@ export async function generateYitokenImage(params: YitokenRequest & { size?: str
   const height = dimensions ? Number(dimensions[2]) : 0;
   if (width < 512 || height < 512 || width > 8192 || height > 8192 || width * height > 4096 * 4096 * 1.01 || width * height < 2048 * 2048 * 0.99) throw new Error('当前 Seedream 图片尺寸只支持 2K–4K 像素面积，请调整分辨率与比例');
   const image = (params.referenceImages || []).map(requireReferenceUrl);
-  const data = await submitOnce(`${root}/v1/images/generations`, params, { model: params.model, prompt: params.prompt, n: 1, size, response_format: 'url', ...(image.length ? { image } : {}) });
+  // Seedream compatibility: textual exclusions are not a native negative_prompt parameter.
+  // Keep original params for submitOnce so exclusions cannot make a blank positive prompt billable.
+  const exclusions = params.negativePrompt?.trim();
+  const prompt = exclusions ? `${params.prompt}\n\nAvoid these visual elements: ${exclusions}` : params.prompt;
+  const data = await submitOnce(`${root}/v1/images/generations`, params, { model: params.model, prompt, n: 1, size, response_format: 'url', ...(image.length ? { image } : {}) });
   const item = data.data?.[0];
   if (item?.url) return { imageUrl: requireReferenceUrl(item.url) };
   if (item?.b64_json) return { imageUrl: `data:image/png;base64,${item.b64_json}` };

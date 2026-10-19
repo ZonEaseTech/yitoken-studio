@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useAPIConfigStore } from '@/stores/api-config-store';
-import { generateCharacterImage, submitGridImageRequest } from './image-generator';
+import { generateCharacterImage, generateSceneImage, submitGridImageRequest } from './image-generator';
 import { generateFreedomImage, generateFreedomVideo } from '@/lib/freedom/freedom-api';
 import { callVideoGenerationApi } from '@/components/panels/director/use-video-generation';
 
@@ -32,11 +32,61 @@ describe('YITOKEN integration calls real declared paths', () => {
     expect(requests[0].body.metadata.content).toContainEqual({type:'image_url',image_url:{url:'https://assets.test/character.png'},role:'reference_image'});
   });
 });
-it('refuses unvalidated negative-prompt mode without sending a paid image request', async () => {
-  configure(); const fetcher=vi.fn(async()=>Response.json({data:[{url:'https://assets.test/result.png'}]})); vi.stubGlobal('fetch',fetcher);
-  await expect(generateFreedomImage({prompt:'test',negativePrompt:'bad'})).rejects.toThrow(/尚未|不支持/);
-  await expect(generateCharacterImage({prompt:'test',negativePrompt:'bad'})).rejects.toThrow(/尚未|不支持/);
+it('character, scene and freedom image defaults preserve visual exclusions as prompt text, not unsupported API fields', async () => {
+  configure();
+  const requests: any[] = [];
+  const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+    expect(url).toBe('https://yitoken.com.cn/v1/images/generations');
+    requests.push(JSON.parse(init.body as string));
+    return Response.json({ data: [{ url: 'https://assets.test/result.png' }] });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  const params = { prompt: 'Draw the character sheet', negativePrompt: '  blurry, low quality, watermark, anime  ' };
+  await generateCharacterImage({ ...params, referenceImages: ['https://assets.test/ref.png'] });
+  await generateSceneImage(params);
+  await generateFreedomImage(params);
+  expect(fetcher).toHaveBeenCalledTimes(3);
+  for (const body of requests) {
+    expect(body.prompt).toBe('Draw the character sheet\n\nAvoid these visual elements: blurry, low quality, watermark, anime');
+    expect(body).not.toHaveProperty('negative_prompt');
+    expect(body).not.toHaveProperty('negativePrompt');
+    expect(body).toMatchObject({ model: 'seedream-5.0-lite', n: 1, size: '2048x2048' });
+  }
+  expect(requests[0].image).toEqual(['https://assets.test/ref.png']);
+});
+it('negative-prompt compatibility keeps ordinary prompts unchanged and cannot bypass blank prompt or advanced-option guards', async () => {
+  configure();
+  const requests: any[] = [];
+  const fetcher = vi.fn(async (_url: string, init: RequestInit) => {
+    requests.push(JSON.parse(init.body as string));
+    return Response.json({ data: [{ url: 'https://assets.test/result.png' }] });
+  });
+  vi.stubGlobal('fetch', fetcher);
+  for (const negativePrompt of [undefined, '  ']) await generateCharacterImage({ prompt: 'Keep original prompt', negativePrompt });
+  expect(requests.map(body => body.prompt)).toEqual(['Keep original prompt', 'Keep original prompt']);
+  fetcher.mockClear();
+  for (const generate of [generateCharacterImage, generateSceneImage, generateFreedomImage]) {
+    await expect(generate({ prompt: '  ', negativePrompt: 'blurry' })).rejects.toThrow();
+  }
+  await expect(generateFreedomImage({ prompt: 'test', negativePrompt: 'blurry', extraParams: { unverified: true } })).rejects.toThrow(/高级/);
   expect(fetcher).not.toHaveBeenCalled();
+});
+it('negative-prompt compatibility never retries an ambiguous paid image submission', async () => {
+  configure();
+  for (const failure of ['network', '503', 'invalid-json', 'missing-image']) {
+    const fetcher = vi.fn(async () => {
+      if (failure === 'network') throw new TypeError('synthetic disconnect');
+      if (failure === '503') return Response.json({}, { status: 503 });
+      if (failure === 'invalid-json') return new Response('not JSON');
+      return Response.json({ data: [] });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    for (const generate of [generateCharacterImage, generateSceneImage, generateFreedomImage]) {
+      fetcher.mockClear();
+      await expect(generate({ prompt: 'character', negativePrompt: 'blurry, watermark' })).rejects.toMatchObject({ submissionAttempted: true, retrySafe: false });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    }
+  }
 });
 it('director cancellation before image submission never sends a paid POST', async()=>{
   configure();const posts:string[]=[];
@@ -92,4 +142,30 @@ it('active Director storyboard scene-video workflow submits only once to the dec
   const pending=generateSceneVideos([{id:1,imageDataUrl:'https://assets.test/ref.png',videoPrompt:'test'}],{aspectRatio:'16:9',apiKey:'fake-key',provider:'yitoken',baseUrl:'https://yitoken.com.cn',model:'seedance-2.0-mini'});
   await vi.runAllTimersAsync();expect((await pending).size).toBe(0);vi.useRealTimers();
   expect(posts).toEqual(['https://yitoken.com.cn/v1/videos']);
+});
+
+it('mixed-provider freedom rotation cannot retry a YITOKEN submission marked unsafe', async () => {
+  configure();
+  const { resetFeatureRoundRobin } = await import('./feature-router');
+  const state = useAPIConfigStore.getState();
+  useAPIConfigStore.setState({
+    providers: [{ id: 'custom-fixture', platform: 'custom', name: 'Custom fixture', apiKey: 'fake-custom-key', baseUrl: 'https://custom.test', model: ['seedream-5.0-lite'] }, ...state.providers],
+    featureBindings: { ...state.featureBindings, freedom_image: ['custom-fixture:seedream-5.0-lite', 'yt:seedream-5.0-lite'] },
+  });
+  resetFeatureRoundRobin('freedom_image');
+  const posts: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === 'POST') posts.push(url);
+    return Response.json({}, { status: 503 });
+  }));
+  vi.useFakeTimers();
+  try {
+    const pending = generateFreedomImage({ prompt: 'character sheet', negativePrompt: 'blurry' }).catch(error => error);
+    await vi.runAllTimersAsync();
+    expect(await pending).toMatchObject({ submissionAttempted: true, retrySafe: false });
+    expect(posts).toEqual(['https://yitoken.com.cn/v1/images/generations']);
+  } finally {
+    vi.useRealTimers();
+    resetFeatureRoundRobin('freedom_image');
+  }
 });

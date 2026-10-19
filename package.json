@@ -1,7 +1,7 @@
 {
   "name": "yitoken-studio",
   "productName": "YITOKEN Studio",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
   "description": "YITOKEN AI 分镜、素材创作与本地整片合成客户端（基于 Moyin Creator）",
   "author": "MemeCalculate",
   "license": "AGPL-3.0-or-later",

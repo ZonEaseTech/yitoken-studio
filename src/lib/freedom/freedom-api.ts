@@ -122,7 +122,7 @@ async function freedomRetry<T>(
       return await operation();
     } catch (error) {
       lastError = error as Error;
-      if (!isRetryableError(error)) throw error;
+      if ((error as { retrySafe?: boolean })?.retrySafe === false || !isRetryableError(error)) throw error;
 
       // 触发 key 轮换（如果有 keyManager）
       const errStatus = (error as any)?.status;
@@ -355,13 +355,12 @@ async function _generateFreedomImageInner(
   const model = params.model || defaultModel;
   const normalizedBase = baseUrl.replace(/\/+$/, '');
   if (config.platform === 'yitoken') {
-    if (params.negativePrompt?.trim()) throw new Error('YITOKEN 首版尚未适配负向提示词，请写入正向提示词或清空该选项');
     const [w, h] = (params.aspectRatio || '1:1').split(':').map(Number);
     const scale = params.resolution === '4K' ? 4096 : 2048;
     const width = params.width || Math.round(Math.sqrt(w / h) * scale / 8) * 8;
     const height = params.height || Math.round(Math.sqrt(h / w) * scale / 8) * 8;
     if (params.extraParams && Object.keys(params.extraParams).length) throw new Error('YITOKEN 首版不支持未验证的高级图片参数');
-    const result = await generateYitokenImage({ baseUrl, apiKey, model, prompt: params.prompt, size: `${width}x${height}` });
+    const result = await generateYitokenImage({ baseUrl, apiKey, model, prompt: params.prompt, negativePrompt: params.negativePrompt, size: `${width}x${height}` });
     return { url: result.imageUrl, mediaId: saveToMediaLibrary(result.imageUrl, params.prompt, 'ai-image') };
   }
 

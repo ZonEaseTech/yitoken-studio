@@ -91,6 +91,8 @@ export function startDownloadEntries(doc) {
       const home = container.querySelector('a[href="/"]');
       if (home) home.after(link); else container.append(link);
     }
+    if (link.target !== '_blank') link.target = '_blank';
+    if (link.rel !== 'noopener noreferrer') link.rel = 'noopener noreferrer';
     const classes = template.className.split(/\s+/).filter(name => name !== 'active' && name !== 'text-foreground').join(' ');
     if (link.className !== classes) link.className = classes;
     if (link.style.transitionDelay !== template.style.transitionDelay) link.style.transitionDelay = template.style.transitionDelay;

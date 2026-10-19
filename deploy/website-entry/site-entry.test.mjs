@@ -121,9 +121,9 @@ after(async () => {
 test('guests get native desktop and mobile download links without replacing existing navigation', async () => {
   await navigate();
   await evaluate(`globalThis.YitokenSiteDownloadEntries?.refresh()`);
-  const result = await evaluate(`({links:[...document.querySelectorAll('header a[href="/downloads/"],.overlay a[href="/downloads/"]')].map(a=>({href:a.getAttribute('href'),target:a.target})),signIn:document.querySelectorAll('a[href="/sign-in"]').length,about:document.querySelectorAll('a[href="/about"]').length,attribution:document.body.innerText.includes('New API / QuantumNous')})`);
+  const result = await evaluate(`({links:[...document.querySelectorAll('header a[href="/downloads/"],.overlay a[href="/downloads/"]')].map(a=>({href:a.getAttribute('href'),target:a.target,rel:a.rel})),signIn:document.querySelectorAll('a[href="/sign-in"]').length,about:document.querySelectorAll('a[href="/about"]').length,attribution:document.body.innerText.includes('New API / QuantumNous')})`);
   assert.equal(result.links.length, 2, 'Feature absent: both original navigation locations need a download link');
-  assert.ok(result.links.every(a => a.href === '/downloads/' && a.target !== '_blank'));
+  assert.ok(result.links.every(a => a.href === '/downloads/' && a.target === '_blank' && a.rel.split(/\s+/).includes('noopener') && a.rel.split(/\s+/).includes('noreferrer')));
   assert.equal(result.signIn, 2); assert.equal(result.about, 2); assert.equal(result.attribution, true);
 });
 test('all seven language blocks have a visible desktop app card and footer link while web studio and copyright remain', async () => {
@@ -219,7 +219,7 @@ test('long translated labels and tablet navigation remain contained; mobile uses
   assert.equal(await evaluate(`getComputedStyle(document.querySelector('.overlay')).display`), 'block');
   assert.equal(await evaluate(`document.body.style.overflow`), 'hidden');
 });
-for (const location of ['header', 'card', 'footer', 'mobile']) {
+for (const location of ['card', 'footer']) {
   test(`${location} entry performs an unauthenticated top-level Document GET, not an SPA change`, async () => {
     await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
     const prior = requests.filter(r => r.path === '/downloads/' && r.document).length;
@@ -242,6 +242,7 @@ test('authenticated header preserves 48px layout and original controls across de
       const baseline = await evaluate(measure);
       await evaluate(`import('/site-entry.mjs').then(m=>m.startDownloadEntries(document))`);
       await waitFor(`document.querySelector('.console-top-nav a[href="/downloads/"]')?.textContent===${JSON.stringify(label)}`);
+      assert.deepEqual(await evaluate(`(()=>{const a=document.querySelector('.console-top-nav a[data-yitoken-download-nav-link]');return {target:a.target,rel:a.rel}})()`),{target:'_blank',rel:'noopener noreferrer'});
       const result = await evaluate(measure);
       const context = `${lang}/${width}`;
       assert.equal(result.header, 48, context);
@@ -255,16 +256,40 @@ test('authenticated header preserves 48px layout and original controls across de
     }
   }
 });
-test('download anchors explicitly remain in this tab even with a default blank base target', async () => {
+test('navigation opens isolated download tabs while the current website page stays open', async () => {
+  for (const selector of ['header a[data-yitoken-download-nav-link]', '.overlay a[data-yitoken-download-nav-link]']) {
+    await navigate(); await waitFor(`document.querySelector(${JSON.stringify(selector)})`);
+    const originalURL = await evaluate('location.href');
+    const before = (await send('Target.getTargets')).targetInfos.filter(t=>t.type==='page');
+    const prior = requests.filter(r=>r.path==='/downloads/' && r.document).length;
+    await send('Runtime.evaluate', { expression: `document.querySelector(${JSON.stringify(selector)}).click()`, userGesture: true });
+    let popup;
+    const deadline = Date.now()+5000;
+    while (Date.now()<deadline) {
+      popup = (await send('Target.getTargets')).targetInfos.find(t=>t.type==='page' && !before.some(old=>old.targetId===t.targetId));
+      if (popup) break;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.ok(popup, 'Navigation click must open a new tab');
+    try {
+      const {sessionId}=await send('Target.attachToTarget',{targetId:popup.targetId,flatten:true});
+      await waitFor(`document.title==='Downloads destination' && location.href===${JSON.stringify(base+'/downloads/')}`,sessionId);
+      assert.equal(await evaluate('window.opener===null',sessionId),true,'Download tab must not have an opener');
+      assert.equal(await evaluate('location.href'),originalURL,'Current website must not navigate away');
+      assert.equal(requests.filter(r=>r.path==='/downloads/' && r.document).length,prior+1);
+      assert.equal((await send('Target.getTargets')).targetInfos.filter(t=>t.type==='page').length,before.length+1);
+    } finally { await send('Target.closeTarget',{targetId:popup.targetId}); }
+  }
+});
+test('non-navigation download anchors explicitly remain in this tab even with a default blank base target', async () => {
   await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
   await evaluate(`const base=document.createElement('base');base.target='_blank';document.head.append(base)`);
-  const targets = await evaluate(`[...document.querySelectorAll('a[data-yitoken-download-link]'),...document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('a[data-yitoken-download-link]')].map(a=>a.target)`);
-  assert.ok(targets.length > 0); assert.ok(targets.every(target=>target==='_self'), 'Explicit same-tab navigation is part of the download contract');
+  const targets = await evaluate(`[...document.querySelector('.custom-home-content').shadowRoot.querySelectorAll('a[data-yitoken-download-link]')].map(a=>a.target)`);
+  assert.ok(targets.length > 0); assert.ok(targets.every(target=>target==='_self'), 'Cards and footer keep explicit same-tab navigation');
   const before = (await send('Target.getTargets')).targetInfos.filter(target=>target.type==='page').length;
-  await evaluate(`document.querySelector('header a[href="/downloads/"]').click()`);
+  await evaluate(`document.querySelector('.custom-home-content').shadowRoot.querySelector('[data-yitoken-download-card] a').click()`);
   await waitFor(`location.pathname==='/downloads/' && document.title==='Downloads destination'`);
-  assert.equal((await send('Target.getTargets')).targetInfos.filter(target=>target.type==='page').length, before, 'Normal click must not open another tab');
-
+  assert.equal((await send('Target.getTargets')).targetInfos.filter(target=>target.type==='page').length, before, 'Card click must not open another tab');
 });
 test('cleanup removes only injected entries and leaves original content available for rollback', async () => {
   await navigate(); await waitFor(`document.querySelector('header a[href="/downloads/"]')`);
