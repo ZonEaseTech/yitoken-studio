@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const upstreamPrefix = "/ZonEaseTech/yitoken-studio/releases/download/v0.1.0-alpha.1/"
+const upstreamPrefix = "/ZonEaseTech/yitoken-studio/releases/download/v0.1.0-alpha.2/"
 
 // Large installers must remain resumable on slow international links; still bounded.
 const transferTimeout = 2 * time.Hour
@@ -77,8 +77,27 @@ func newRelay(client *http.Client, assets map[string]asset) *relay {
 			}
 			assets[a.Name] = a
 		}
-		if len(assets) != 15 {
+		if len(assets) != 13 {
 			panic("incomplete embedded manifest")
+		}
+		for _, name := range []string{
+			"BUILD-PROVENANCE-linux-x64.json",
+			"BUILD-PROVENANCE-mac-arm64.json",
+			"BUILD-PROVENANCE-mac-x64.json",
+			"BUILD-PROVENANCE-win-x64.json",
+			"SHA256SUMS.txt",
+			"YITOKEN.Studio-0.1.0-alpha.2.AppImage",
+			"yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg",
+			"yitoken-studio-0.1.0-alpha.2-arm64-mac.zip",
+			"yitoken-studio-0.1.0-alpha.2-setup.exe",
+			"yitoken-studio-0.1.0-alpha.2-source.tar.gz",
+			"yitoken-studio-0.1.0-alpha.2-source.tar.gz.sha256",
+			"yitoken-studio-0.1.0-alpha.2-x64-mac.dmg",
+			"yitoken-studio-0.1.0-alpha.2-x64-mac.zip",
+		} {
+			if _, exists := assets[name]; !exists {
+				panic("unexpected embedded release asset set")
+			}
 		}
 	}
 	return &relay{client: client, assets: assets, slots: make(chan struct{}, 8)}
@@ -246,6 +265,10 @@ func (h *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name, ok := strings.CutPrefix(r.URL.Path, "/downloads/assets/")
+	// One exact legacy checklist alias, after method/query/encoded-path validation.
+	if name == "SHA256SUMS-GITHUB.txt" {
+		name = "SHA256SUMS.txt"
+	}
 	a, known := h.assets[name]
 	if !ok || !known || !validFilename(name) {
 		writeError(w, r, 404, "download not found")

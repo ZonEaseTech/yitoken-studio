@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -272,15 +274,15 @@ func TestLocalDocumentsAndPage(t *testing.T) {
 		t.Error("download grid must contain only the four platform installer cards")
 	}
 	for _, name := range []string{
-		"yitoken-studio-0.1.0-alpha.1-setup.exe", "YITOKEN.Studio-0.1.0-alpha.1.AppImage",
-		"yitoken-studio-0.1.0-alpha.1-arm64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-arm64-mac.zip",
-		"yitoken-studio-0.1.0-alpha.1-x64-mac.dmg", "yitoken-studio-0.1.0-alpha.1-x64-mac.zip",
+		"yitoken-studio-0.1.0-alpha.2-setup.exe", "YITOKEN.Studio-0.1.0-alpha.2.AppImage",
+		"yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg", "yitoken-studio-0.1.0-alpha.2-arm64-mac.zip",
+		"yitoken-studio-0.1.0-alpha.2-x64-mac.dmg", "yitoken-studio-0.1.0-alpha.2-x64-mac.zip",
 	} {
 		if len(regexp.MustCompile(`<a\b[^>]*href="/downloads/assets/`+regexp.QuoteMeta(name)+`"[^>]*>`).FindAllString(page, -1)) != 1 {
 			t.Errorf("missing installer download %s", name)
 		}
 	}
-	for _, path := range []string{"/downloads/assets/yitoken-studio-0.1.0-alpha.1-source.tar.gz", "/downloads/relay-source.tar.gz"} {
+	for _, path := range []string{"/downloads/assets/yitoken-studio-0.1.0-alpha.2-source.tar.gz", "/downloads/relay-source.tar.gz"} {
 		if !strings.Contains(page, `<a href="`+path+`">`) {
 			t.Errorf("source must remain available as a text link, not an installer card: %s", path)
 		}
@@ -300,7 +302,7 @@ func TestDownloadPortalGuidance(t *testing.T) {
 	page := w.Body.String()
 	// Inline emphasis and line breaks may change without changing the approved visible message.
 	visibleText := html.UnescapeString(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(page, ""))
-	for _, want := range []string{"从剧本和分镜，到一部完整视频。", "选择系统下载", "选择你的版本", "第一次使用，三步就绪。", "安装桌面客户端", "填入自己的 API Key", "创作片段，导出整片", "0.1.0-alpha.1", "使用你自己获取的 API Key", "客户端不附赠运营方 Key", "主动 AI 生成按本人账户额度计费"} {
+	for _, want := range []string{"从剧本和分镜，到一部完整视频。", "选择系统下载", "选择你的版本", "第一次使用，三步就绪。", "安装桌面客户端", "填入自己的 API Key", "创作片段，导出整片", "0.1.0-alpha.2", "使用你自己获取的 API Key", "客户端不附赠运营方 Key", "主动 AI 生成按本人账户额度计费"} {
 		if !strings.Contains(visibleText, want) {
 			t.Errorf("missing visible download guidance %s", want)
 		}
@@ -387,15 +389,15 @@ func TestDownloadPortalGuidance(t *testing.T) {
 	// Safety and acceptance limits stay readable on demand, not as a first-screen banner.
 	folded := regexp.MustCompile(`(?s)<details\b[^>]*>.*?</details>`).FindAllString(page, -1)
 	for _, fact := range []string{
-		"本版为 alpha 预发布", "签名：未签名", "macOS 公证：未公证",
+		"本版为 alpha 预发布", "macOS 为完整 ad-hoc 本地签名（非 Developer ID）", "macOS 公证：未公证",
 		"模型列表 / 模拟协议测试不代表真实生成成功", "Windows 原生安装与系统加密、付费生成尚未完成验收",
-		"19 个测试文件 / 160 项测试通过", "Mac 原生安装已验证", "不代表所有系统兼容性或付费生成已经验证",
+		"本版本四平台发布构建与安装包校验已通过", "不代表所有系统兼容性或付费生成已经验证", "不等于 Apple 信任签名或 Gatekeeper 放行",
 		"720p / 1080p", "16:9 / 9:16", "30fps", "H.264 / AAC", "无音轨补静音", "不同比例留黑边、不拉伸",
 		"字幕", "BGM", "转场", "裁剪", "多轨编辑", "在线项目分享", "200", "10 分钟", "2 小时", "512MiB", "2GiB",
 		"取消不删原素材，不覆盖已有输出", "新的本地保存位置", "等待实际验证成功", "所选 AI 服务商",
 		"公开图床默认关闭", "开启前须明确同意", "勿上传未授权或机密内容", "Key 仅会话有效", "不回退明文持久化",
 		"网络提交结果未知时不自动重复提交", "先核对后台任务", "已校验安装包从本站服务器直接下载", "未镜像对应源码或其他资产仍由本站转发 GitHub", "完整下载后自行核验",
-		"上游不可达、链接校验失败或并发已满", "原 SHA256SUMS.txt", "原作者与版权声明保留", "AGPL-3.0-or-later",
+		"上游不可达、链接校验失败或并发已满", "兼容路径 SHA256SUMS-GITHUB.txt 返回同一份真实校验清单", "原作者与版权声明保留", "AGPL-3.0-or-later",
 		"FFmpeg / x264", "GPL", "精确对应源码", "第三方许可证继续适用", "品牌改编不代表上游作者背书", "未进行法律或专利许可认证",
 	} {
 		if !strings.Contains(strings.Join(folded, "\n"), fact) {
@@ -403,12 +405,12 @@ func TestDownloadPortalGuidance(t *testing.T) {
 		}
 	}
 	for _, metadata := range []string{
-		"168,144,976 bytes", "160.4 MiB", "576655a32159c9b1f96c62a1ca4d132bd94504deda63205356ef4f05a789266f",
-		"200,384,647 bytes", "191.1 MiB", "bdd36a58f7cb2c50a37422b176771f68f1088abf572e2ed9f1116f162d2cfcf0",
-		"196,821,677 bytes", "187.7 MiB", "17c7da96c40c620411df1e76457f547c5e808ace52986ad1bd869f3fa57d02aa",
-		"196,997,949 bytes", "187.9 MiB", "c5534528b8d7eb59909a97996b36267147b689828f3049bb2484e789e8f30d51",
-		"202,422,977 bytes", "193.0 MiB", "7b3ca84c609053df1d5d2baa45f1b0a3f9f4b10185ea7656c930cedf62fdce1c",
-		"202,608,058 bytes", "193.2 MiB", "cc221d8e6f6ad7fae19c95012cd310f4d0be20575485f8bd75245fbe8807d04c",
+		"200,388,537 bytes", "191.1 MiB", "9c34868a1972c9a312bca5b9fb6eb09145dc5cafe4c9c20795c9bda1a600f63d",
+		"196,874,571 bytes", "187.8 MiB", "bbff1c612b3ffeb057c56a209f266fd9f83eb0071732c89bb5d4b33082e19719",
+		"197,025,250 bytes", "187.9 MiB", "76bf40bc5d8c8395cd4db15dbdcda14e96a245203592a05cd997665602f102ad",
+		"168,150,633 bytes", "160.4 MiB", "d2124b1cd0b89dc702e4a68075edeb6cf90cce755fe2a2aacc6e659cf77a66e7",
+		"204,701,049 bytes", "195.2 MiB", "d6ec72220b27ca7364892f86fc67a3e2fce4e10e0ed43f61d52d39c33099aa5d",
+		"204,851,265 bytes", "195.4 MiB", "46263b326235b4e2af19f277dea94d0f6e1d948857a4190133ec7b16ae79d0e3",
 		"默认 API 为 YITOKEN", "客户端不附赠运营方 Key", "本机拼接已有视频不新增 AI 生成费用",
 		`content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"`,
 	} {
@@ -816,4 +818,124 @@ func TestMirrorInterruptedStreamAborts(t *testing.T) {
 			h.ServeHTTP(w, httptest.NewRequest("GET", "/downloads/assets/sample.zip", nil).WithContext(ctx))
 		})
 	}
+}
+
+func TestPublishedAlpha2Metadata(t *testing.T) {
+	const version = "0.1.0-alpha.2"
+	var document struct {
+		Version      string  `json:"version"`
+		ReleaseTag   string  `json:"release_tag"`
+		SourceCommit string  `json:"source_commit"`
+		WorkflowRun  string  `json:"workflow_run"`
+		Assets       []asset `json:"assets"`
+	}
+	if err := json.Unmarshal(manifestDocument, &document); err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]asset{
+		"BUILD-PROVENANCE-linux-x64.json":                   {Name: "BUILD-PROVENANCE-linux-x64.json", Size: 2618, SHA256: "ed87167cbfd4af2999516f26c2b57d0833354b3e26f8a5bb14ce0b9699d074e1"},
+		"BUILD-PROVENANCE-mac-arm64.json":                   {Name: "BUILD-PROVENANCE-mac-arm64.json", Size: 3427, SHA256: "276eb57c285079c94df049d68e84fd32e66d56023a6fd9bd66b4ed99a3398a9b"},
+		"BUILD-PROVENANCE-mac-x64.json":                     {Name: "BUILD-PROVENANCE-mac-x64.json", Size: 3419, SHA256: "333854abe182c99e881843f7021a3fa27a76e74b9190f31a1be98ad5f1ae6555"},
+		"BUILD-PROVENANCE-win-x64.json":                     {Name: "BUILD-PROVENANCE-win-x64.json", Size: 2625, SHA256: "308f5e84321a5c089eece84fca92bbc16d7825c029a8557dd97a87d5d2d40b07"},
+		"SHA256SUMS.txt":                                    {Name: "SHA256SUMS.txt", Size: 1254, SHA256: "b33b19c819beb850fa2e20e2c934625264fae7d3e337e1cd2e9342b45dca130d"},
+		"YITOKEN.Studio-0.1.0-alpha.2.AppImage":             {Name: "YITOKEN.Studio-0.1.0-alpha.2.AppImage", Size: 200388537, SHA256: "9c34868a1972c9a312bca5b9fb6eb09145dc5cafe4c9c20795c9bda1a600f63d"},
+		"yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg":        {Name: "yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg", Size: 196874571, SHA256: "bbff1c612b3ffeb057c56a209f266fd9f83eb0071732c89bb5d4b33082e19719"},
+		"yitoken-studio-0.1.0-alpha.2-arm64-mac.zip":        {Name: "yitoken-studio-0.1.0-alpha.2-arm64-mac.zip", Size: 197025250, SHA256: "76bf40bc5d8c8395cd4db15dbdcda14e96a245203592a05cd997665602f102ad"},
+		"yitoken-studio-0.1.0-alpha.2-setup.exe":            {Name: "yitoken-studio-0.1.0-alpha.2-setup.exe", Size: 168150633, SHA256: "d2124b1cd0b89dc702e4a68075edeb6cf90cce755fe2a2aacc6e659cf77a66e7"},
+		"yitoken-studio-0.1.0-alpha.2-source.tar.gz":        {Name: "yitoken-studio-0.1.0-alpha.2-source.tar.gz", Size: 25536285, SHA256: "d7f9ff7836a49e1c64462c3efc84deef4171fbf28e13c1857431432e18ae335e"},
+		"yitoken-studio-0.1.0-alpha.2-source.tar.gz.sha256": {Name: "yitoken-studio-0.1.0-alpha.2-source.tar.gz.sha256", Size: 109, SHA256: "be876fd3bd4eb132a0ffbdbe9020b45351a90092271b418eefdb4219690be4d6"},
+		"yitoken-studio-0.1.0-alpha.2-x64-mac.dmg":          {Name: "yitoken-studio-0.1.0-alpha.2-x64-mac.dmg", Size: 204701049, SHA256: "d6ec72220b27ca7364892f86fc67a3e2fce4e10e0ed43f61d52d39c33099aa5d"},
+		"yitoken-studio-0.1.0-alpha.2-x64-mac.zip":          {Name: "yitoken-studio-0.1.0-alpha.2-x64-mac.zip", Size: 204851265, SHA256: "46263b326235b4e2af19f277dea94d0f6e1d948857a4190133ec7b16ae79d0e3"},
+	}
+	if document.Version != version || document.ReleaseTag != "v"+version || document.SourceCommit != "e711d7ae13581871e046af764b0ddd0fec4c8c59" || document.WorkflowRun != "https://github.com/ZonEaseTech/yitoken-studio/actions/runs/39236156020" || len(document.Assets) != len(expected) {
+		t.Error("release metadata must match verified alpha2 assets")
+	}
+	h := newRelay(productionClient(), nil)
+	for name, want := range expected {
+		if got, ok := h.assets[name]; !ok || got != want {
+			t.Errorf("release metadata must match verified alpha2 assets: %s", name)
+		}
+	}
+	var update struct {
+		Version              string `json:"version"`
+		Signed               bool   `json:"signed"`
+		Notarized            bool   `json:"notarized"`
+		MacSigning           string `json:"mac_signing"`
+		MacSignatureVerified bool   `json:"mac_signature_verified"`
+	}
+	if err := json.Unmarshal(versionDocument, &update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Version != version || update.Signed || update.Notarized || update.MacSigning != "adhoc" || !update.MacSignatureVerified {
+		t.Error("release metadata must match verified alpha2 assets and signing scope")
+	}
+	page := string(indexPage)
+	for name, a := range expected {
+		if strings.HasSuffix(name, ".exe") || strings.HasSuffix(name, ".dmg") || strings.HasSuffix(name, ".zip") || strings.HasSuffix(name, ".AppImage") || name == "yitoken-studio-0.1.0-alpha.2-source.tar.gz" {
+			for _, value := range []string{name, fmt.Sprintf("%s bytes", humanBytes(a.Size)), fmt.Sprintf("%.1f MiB", float64(a.Size)/1048576), a.SHA256} {
+				if !strings.Contains(page, value) {
+					t.Errorf("release page metadata mismatch: %s %s", name, value)
+				}
+			}
+		}
+	}
+	for _, path := range []string{"/downloads/assets/SHA256SUMS.txt", "/downloads/assets/SHA256SUMS-GITHUB.txt"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", path+"?bad=1", nil))
+		if w.Code != 400 {
+			t.Error("checksum alias must retain query validation")
+		}
+	}
+	canonical := h.assets["SHA256SUMS.txt"]
+	h.client = &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != upstreamPrefix+"SHA256SUMS.txt" {
+			t.Error("checksum alias selected wrong upstream")
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, ContentLength: canonical.Size, Body: io.NopCloser(strings.NewReader(strings.Repeat("x", int(canonical.Size))))}, nil
+	})}
+	var bodies [][]byte
+	for _, path := range []string{"/downloads/assets/SHA256SUMS.txt", "/downloads/assets/SHA256SUMS-GITHUB.txt"} {
+		for _, method := range []string{"GET", "HEAD"} {
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(method, path, nil))
+			if w.Code != 200 || w.Header().Get("Content-Disposition") != "attachment; filename=SHA256SUMS.txt" {
+				t.Error("checksum aliases must return canonical checklist")
+			}
+			if method == "GET" {
+				bodies = append(bodies, w.Body.Bytes())
+			} else if w.Body.Len() != 0 {
+				t.Error("checksum alias HEAD body")
+			}
+		}
+	}
+	if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) {
+		t.Error("checksum alias bytes diverged")
+	}
+	// A valid-looking but unapproved 14th/name-replacement asset must never expand the public release allowlist.
+	saved := manifestDocument
+	defer func() { manifestDocument = saved }()
+	var broken map[string]any
+	if err := json.Unmarshal(saved, &broken); err != nil {
+		t.Fatal(err)
+	}
+	entries := broken["assets"].([]any)
+	entries[0].(map[string]any)["name"] = "unexpected-alpha2.txt"
+	manifestDocument, _ = json.Marshal(broken)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("modified exact release allowlist accepted")
+			}
+		}()
+		newRelay(productionClient(), nil)
+	}()
+}
+
+// Human-readable byte counts are part of the public release metadata contract.
+func humanBytes(n int64) string {
+	value := strconv.FormatInt(n, 10)
+	for i := len(value) - 3; i > 0; i -= 3 {
+		value = value[:i] + "," + value[i:]
+	}
+	return value
 }

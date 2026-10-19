@@ -1,100 +1,91 @@
 {
-  "version": "0.1.0-alpha.1",
-  "release_tag": "v0.1.0-alpha.1",
+  "product": "YITOKEN Studio",
+  "version": "0.1.0-alpha.2",
+  "release_tag": "v0.1.0-alpha.2",
   "repository": "https://github.com/ZonEaseTech/yitoken-studio",
-  "delivery": "real-time GitHub relay; no local installer cache",
-  "checksum_manifest": "/downloads/assets/SHA256SUMS-GITHUB.txt",
+  "source_commit": "e711d7ae13581871e046af764b0ddd0fec4c8c59",
+  "workflow_run": "https://github.com/ZonEaseTech/yitoken-studio/actions/runs/39236156020",
+  "delivery": "verified read-only server mirror; fixed GitHub fallback for unmirrored assets",
+  "checksum_manifest": "/downloads/assets/SHA256SUMS.txt",
   "relay_source": "/downloads/relay-source.tar.gz",
   "assets": [
     {
-      "name": "BUILD-PROVENANCE-linux-x64-GITHUB.json",
-      "size": 3045,
-      "sha256": "bc72c4c4cc1b2d4637e3154d1fc50a09a7f3230d332e63e49fc0733a895fff4d",
-      "url": "/downloads/assets/BUILD-PROVENANCE-linux-x64-GITHUB.json"
-    },
-    {
       "name": "BUILD-PROVENANCE-linux-x64.json",
       "size": 2618,
-      "sha256": "21eb1a4c3f00ad76ba772c7df0548cf538973c480d6048adeb369248055f5527",
+      "sha256": "ed87167cbfd4af2999516f26c2b57d0833354b3e26f8a5bb14ce0b9699d074e1",
       "url": "/downloads/assets/BUILD-PROVENANCE-linux-x64.json"
     },
     {
       "name": "BUILD-PROVENANCE-mac-arm64.json",
-      "size": 2786,
-      "sha256": "732630936f75cc531d52e91bb26392443fe9b91ac9fe9df87342b1d62dd33e60",
+      "size": 3427,
+      "sha256": "276eb57c285079c94df049d68e84fd32e66d56023a6fd9bd66b4ed99a3398a9b",
       "url": "/downloads/assets/BUILD-PROVENANCE-mac-arm64.json"
     },
     {
       "name": "BUILD-PROVENANCE-mac-x64.json",
-      "size": 2778,
-      "sha256": "1b9f78e78089abcdd3e4a43d21339eb442099167aff1dd0d08deeb62634ea0d8",
+      "size": 3419,
+      "sha256": "333854abe182c99e881843f7021a3fa27a76e74b9190f31a1be98ad5f1ae6555",
       "url": "/downloads/assets/BUILD-PROVENANCE-mac-x64.json"
     },
     {
       "name": "BUILD-PROVENANCE-win-x64.json",
       "size": 2625,
-      "sha256": "5ad9a5c082b4222261e7d0c611d4138750313003a0695bbb1368fd783e1ce1f2",
+      "sha256": "308f5e84321a5c089eece84fca92bbc16d7825c029a8557dd97a87d5d2d40b07",
       "url": "/downloads/assets/BUILD-PROVENANCE-win-x64.json"
-    },
-    {
-      "name": "SHA256SUMS-GITHUB.txt",
-      "size": 1440,
-      "sha256": "be0011d7836e349ada1e237fd4604565964c4e78a58fbef9828c584cd942f06a",
-      "url": "/downloads/assets/SHA256SUMS-GITHUB.txt"
     },
     {
       "name": "SHA256SUMS.txt",
       "size": 1254,
-      "sha256": "847a13d7f944a10860745ffd4f452a95bae8488eea700bc6541397afc1115856",
+      "sha256": "b33b19c819beb850fa2e20e2c934625264fae7d3e337e1cd2e9342b45dca130d",
       "url": "/downloads/assets/SHA256SUMS.txt"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-arm64-mac.dmg",
-      "size": 196821677,
-      "sha256": "17c7da96c40c620411df1e76457f547c5e808ace52986ad1bd869f3fa57d02aa",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-arm64-mac.dmg"
+      "name": "YITOKEN.Studio-0.1.0-alpha.2.AppImage",
+      "size": 200388537,
+      "sha256": "9c34868a1972c9a312bca5b9fb6eb09145dc5cafe4c9c20795c9bda1a600f63d",
+      "url": "/downloads/assets/YITOKEN.Studio-0.1.0-alpha.2.AppImage"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-arm64-mac.zip",
-      "size": 196997949,
-      "sha256": "c5534528b8d7eb59909a97996b36267147b689828f3049bb2484e789e8f30d51",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-arm64-mac.zip"
+      "name": "yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg",
+      "size": 196874571,
+      "sha256": "bbff1c612b3ffeb057c56a209f266fd9f83eb0071732c89bb5d4b33082e19719",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-arm64-mac.dmg"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-setup.exe",
-      "size": 168144976,
-      "sha256": "576655a32159c9b1f96c62a1ca4d132bd94504deda63205356ef4f05a789266f",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-setup.exe"
+      "name": "yitoken-studio-0.1.0-alpha.2-arm64-mac.zip",
+      "size": 197025250,
+      "sha256": "76bf40bc5d8c8395cd4db15dbdcda14e96a245203592a05cd997665602f102ad",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-arm64-mac.zip"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-source.tar.gz",
-      "size": 25199072,
-      "sha256": "78b8a55536ab208c297605083aa8e08219fe7656648c0328f4be387092855e38",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-source.tar.gz"
+      "name": "yitoken-studio-0.1.0-alpha.2-setup.exe",
+      "size": 168150633,
+      "sha256": "d2124b1cd0b89dc702e4a68075edeb6cf90cce755fe2a2aacc6e659cf77a66e7",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-setup.exe"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-source.tar.gz.sha256",
+      "name": "yitoken-studio-0.1.0-alpha.2-source.tar.gz",
+      "size": 25536285,
+      "sha256": "d7f9ff7836a49e1c64462c3efc84deef4171fbf28e13c1857431432e18ae335e",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-source.tar.gz"
+    },
+    {
+      "name": "yitoken-studio-0.1.0-alpha.2-source.tar.gz.sha256",
       "size": 109,
-      "sha256": "506eaf595a61796787c9f047adf8e3ad91efda5fcd87c7f565eb7a1dd8aed63d",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-source.tar.gz.sha256"
+      "sha256": "be876fd3bd4eb132a0ffbdbe9020b45351a90092271b418eefdb4219690be4d6",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-source.tar.gz.sha256"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-x64-mac.dmg",
-      "size": 202422977,
-      "sha256": "7b3ca84c609053df1d5d2baa45f1b0a3f9f4b10185ea7656c930cedf62fdce1c",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-x64-mac.dmg"
+      "name": "yitoken-studio-0.1.0-alpha.2-x64-mac.dmg",
+      "size": 204701049,
+      "sha256": "d6ec72220b27ca7364892f86fc67a3e2fce4e10e0ed43f61d52d39c33099aa5d",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-x64-mac.dmg"
     },
     {
-      "name": "yitoken-studio-0.1.0-alpha.1-x64-mac.zip",
-      "size": 202608058,
-      "sha256": "cc221d8e6f6ad7fae19c95012cd310f4d0be20575485f8bd75245fbe8807d04c",
-      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.1-x64-mac.zip"
-    },
-    {
-      "name": "YITOKEN.Studio-0.1.0-alpha.1.AppImage",
-      "size": 200384647,
-      "sha256": "bdd36a58f7cb2c50a37422b176771f68f1088abf572e2ed9f1116f162d2cfcf0",
-      "url": "/downloads/assets/YITOKEN.Studio-0.1.0-alpha.1.AppImage"
+      "name": "yitoken-studio-0.1.0-alpha.2-x64-mac.zip",
+      "size": 204851265,
+      "sha256": "46263b326235b4e2af19f277dea94d0f6e1d948857a4190133ec7b16ae79d0e3",
+      "url": "/downloads/assets/yitoken-studio-0.1.0-alpha.2-x64-mac.zip"
     }
   ]
 }

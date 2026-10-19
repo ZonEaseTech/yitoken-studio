@@ -1,7 +1,11 @@
 {
-  "version": "0.1.0-alpha.1",
-  "release_tag": "v0.1.0-alpha.1",
+  "version": "0.1.0-alpha.2",
+  "release_tag": "v0.1.0-alpha.2",
   "channel": "alpha",
   "signed": false,
-  "notarized": false
+  "notarized": false,
+  "mac_signing": "adhoc",
+  "mac_signature_verified": true,
+  "developer_id": false,
+  "release_notes": "macOS 完整 ad-hoc 本地签名，非 Developer ID，未公证；Windows 未签名。"
 }
