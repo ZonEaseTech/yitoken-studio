@@ -172,13 +172,12 @@ async function generateImage(
   }
 
   if (featureConfig.platform === 'yitoken') {
-    if (params.negativePrompt?.trim()) throw new Error('YITOKEN 首版尚未适配负向提示词，请写入正向提示词或清空该选项');
     const references = await Promise.all((params.referenceImages || []).map(uploadBase64Image));
     const [w, h] = (params.aspectRatio || '1:1').split(':').map(Number);
     const scale = (params.resolution || '2K') === '4K' ? 4096 : 2048;
     const width = Math.round(Math.sqrt(w / h) * scale / 8) * 8;
     const height = Math.round(Math.sqrt(h / w) * scale / 8) * 8;
-    return generateYitokenImage({ apiKey, baseUrl, model, prompt: params.prompt, size: `${width}x${height}`, referenceImages: references });
+    return generateYitokenImage({ apiKey, baseUrl, model, prompt: params.prompt, negativePrompt: params.negativePrompt, size: `${width}x${height}`, referenceImages: references });
   }
 
   const aspectRatio = params.aspectRatio || '1:1';

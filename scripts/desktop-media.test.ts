@@ -108,3 +108,77 @@ test('post-build verification requires exact copied target tools, source archive
   }
  }
 });
+
+test('Darwin source hashes explicitly describe pre-sign bytes without changing other platform metadata', async () => {
+ for (const target of ['darwin-arm64', 'linux-x64', 'win32-x64']) {
+  const {root}=await fixture(target);const snapshot=await prepareDesktopResources(root,target,'0.1.0-alpha.1','scope');
+  const provenance=JSON.parse(await readFile(snapshot.resourceProvenanceFile,'utf8'));
+  expect(provenance.artifactHashScope).toBe(target.startsWith('darwin-')?'source-build-before-code-signing':undefined);
+ }
+});
+
+async function macSigningFixture(target='darwin-arm64') {
+ const {root}=await fixture(target);const snapshot=await prepareDesktopResources(root,target,'0.1.0-alpha.1','signing');
+ const staging=join(root,'release/signing-stage');const appOutDir=join(staging,target==='darwin-x64'?'mac':'mac-arm64');const resources=join(appOutDir,'Fixture.app/Contents/Resources');await mkdir(resources,{recursive:true});
+ for(const [source,name] of [[snapshot.mediaDir,'ffmpeg'],[snapshot.thirdPartyDir,'third_party'],[snapshot.noticesFile,'THIRD-PARTY-NOTICES.txt'],[snapshot.resourceProvenanceFile,'DESKTOP-RESOURCE-PROVENANCE.json']]) await cp(source,join(resources,name),{recursive:true});
+ const environment={YITOKEN_VERIFIED_MEDIA_DIR:snapshot.mediaDir,YITOKEN_VERIFIED_THIRD_PARTY_DIR:snapshot.thirdPartyDir,YITOKEN_THIRD_PARTY_NOTICES:snapshot.noticesFile,YITOKEN_DESKTOP_RESOURCE_PROVENANCE:snapshot.resourceProvenanceFile,YITOKEN_DESKTOP_STAGING_DIR:staging,YITOKEN_DESKTOP_MEDIA_TARGET:target,YITOKEN_MAC_PRE_SIGN_PROOF:join(staging,'MAC-PRE-SIGN-PROOF.json')};
+ const context={appOutDir,electronPlatformName:'darwin',packager:{projectDir:root}};
+ return {root,snapshot,staging,resources,environment,context};
+}
+
+test('Mac afterPack proof permits only post-sign tool bytes after exact pre-sign resource verification', async () => {
+ const module=await import('./desktop-media.mjs');const {default:afterPack}=await import('./verify-mac-resources.mjs');
+ const f=await macSigningFixture();await afterPack(f.context,f.environment);
+ await expect(module.verifyMacPreSignProof(f.staging,'darwin-arm64',f.snapshot)).resolves.toBeDefined();
+ await expect(afterPack(f.context,f.environment)).rejects.toThrow(/exist|proof/i);
+ for(const tool of ['ffmpeg','ffprobe']) { const signed=Buffer.alloc(40);signed.writeUInt32LE(0xfeedfacf,0);signed.writeUInt32LE(0x100000c,4);signed.writeUInt32LE(2,12);signed.write(`signed ${tool}`,16);await writeFile(join(f.resources,'ffmpeg',tool),signed); }
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot)).rejects.toThrow(/checksum/i);
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).resolves.toBe(f.resources);
+ for(const relative of ['ffmpeg/FFMPEG-LICENSE.txt','ffmpeg/MEDIA-PROVENANCE.json','third_party/sources/ffmpeg-9.0.2.tar.xz','THIRD-PARTY-NOTICES.txt','DESKTOP-RESOURCE-PROVENANCE.json']) {
+  const file=join(f.resources,relative);const original=await readFile(file);await writeFile(file,'changed after signing');
+  await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).rejects.toThrow(/checksum/i);await writeFile(file,original);
+ }
+});
+
+test('Mac proof cannot be missing, reused across staging, or survive changed snapshot bytes',async()=>{
+ const module=await import('./desktop-media.mjs');const {default:afterPack}=await import('./verify-mac-resources.mjs');const f=await macSigningFixture();
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).rejects.toThrow(/proof|missing/i);
+ await afterPack(f.context,f.environment);
+ const other=join(f.root,'release/other-stage');await cp(f.staging,other,{recursive:true});
+ await expect(module.verifyMacPreSignProof(other,'darwin-arm64',f.snapshot)).rejects.toThrow(/proof|staging/i);
+ await expect(module.verifyMacPreSignProof(f.staging,'darwin-x64',f.snapshot)).rejects.toThrow(/proof|target/i);
+ await writeFile(join(f.snapshot.mediaDir,'ffmpeg'),'changed snapshot');
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).rejects.toThrow(/proof|snapshot/i);
+});
+
+test('afterPack refuses altered pre-sign resources and wrong hook paths without issuing a proof',async()=>{
+ const {default:afterPack}=await import('./verify-mac-resources.mjs');const f=await macSigningFixture();
+ await writeFile(join(f.resources,'ffmpeg/ffmpeg'),'tampered before signing');
+ await expect(afterPack(f.context,f.environment)).rejects.toThrow(/checksum/i);
+ await expect(readFile(f.environment.YITOKEN_MAC_PRE_SIGN_PROOF)).rejects.toThrow();
+ await cp(join(f.snapshot.mediaDir,'ffmpeg'),join(f.resources,'ffmpeg/ffmpeg'));
+ await expect(afterPack(f.context,{...f.environment,YITOKEN_MAC_PRE_SIGN_PROOF:join(f.root,'wrong-proof')})).rejects.toThrow(/proof/i);
+ await expect(afterPack({...f.context,appOutDir:f.root},f.environment)).rejects.toThrow(/staging|output/i);
+});
+
+test('signed-media option never relaxes Windows/Linux checks or follows signed tool symlinks',async()=>{
+ const module=await import('./desktop-media.mjs');const {default:afterPack}=await import('./verify-mac-resources.mjs');const f=await macSigningFixture();await afterPack(f.context,f.environment);
+ for(const target of ['linux-x64','win32-x64'])await expect(module.verifyPackagedDesktopResources(f.staging,target,f.snapshot,{signedMacMedia:true})).rejects.toThrow(/Mac|darwin|signed/i);
+ const tool=join(f.resources,'ffmpeg/ffmpeg');await rm(tool);await symlink(join(f.snapshot.mediaDir,'ffmpeg'),tool);
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).rejects.toThrow(/regular|symbolic/i);
+});
+
+ test('post-sign media must remain target-architecture Mach-O executables and the proof cannot be a symlink',async()=>{
+ const module=await import('./desktop-media.mjs');const {default:afterPack}=await import('./verify-mac-resources.mjs');const f=await macSigningFixture();await afterPack(f.context,f.environment);
+ for(const bytes of [Buffer.from('not Mach-O'),(()=>{const b=Buffer.alloc(32);b.writeUInt32LE(0xfeedfacf,0);b.writeUInt32LE(0x1000007,4);return b;})()]){
+  await writeFile(join(f.resources,'ffmpeg/ffmpeg'),bytes);await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-arm64',f.snapshot,{signedMacMedia:true})).rejects.toThrow(/Mach-O|architecture/i);
+ }
+ const proof=await readFile(f.environment.YITOKEN_MAC_PRE_SIGN_PROOF);const outside=join(f.root,'outside-proof.json');await writeFile(outside,proof);await rm(f.environment.YITOKEN_MAC_PRE_SIGN_PROOF);await symlink(outside,f.environment.YITOKEN_MAC_PRE_SIGN_PROOF);
+ await expect(module.verifyMacPreSignProof(f.staging,'darwin-arm64',f.snapshot)).rejects.toThrow(/regular|symbolic/i);
+});
+
+test('Intel Mac proof binds x64 staging and post-sign tools retain the Intel architecture',async()=>{
+ const module=await import('./desktop-media.mjs');const {default:afterPack}=await import('./verify-mac-resources.mjs');const f=await macSigningFixture('darwin-x64');await afterPack(f.context,f.environment);
+ for(const tool of ['ffmpeg','ffprobe']){const b=Buffer.alloc(32);b.writeUInt32LE(0xfeedfacf,0);b.writeUInt32LE(0x1000007,4);b.writeUInt32LE(2,12);await writeFile(join(f.resources,'ffmpeg',tool),b);}
+ await expect(module.verifyPackagedDesktopResources(f.staging,'darwin-x64',f.snapshot,{signedMacMedia:true})).resolves.toBe(f.resources);
+});

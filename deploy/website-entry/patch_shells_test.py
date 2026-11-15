@@ -37,8 +37,11 @@ class PatchShellTests(unittest.TestCase):
         self.assertIn('<!-- QuantumNous -->', rendered)
         self.assertIn('src="' + URL + '"', rendered)
         self.assertEqual(rendered.count('href="/downloads/"'), 3)
-        self.assertIn('<nav aria-label="桌面创作客户端"><a href="/downloads/">桌面创作客户端</a></nav>', rendered)
+        self.assertIn('<nav aria-label="桌面创作客户端"><a href="/downloads/" target="_blank" rel="noopener noreferrer">桌面创作客户端</a></nav>', rendered)
         self.assertIn('<footer><a href="/downloads/">桌面创作客户端</a></footer>', rendered)
+        self.assertIn('<a href="/downloads/">下载 YITOKEN Studio</a></section>', rendered)
+        self.assertEqual(rendered.count('target="_blank"'), 1)
+        self.assertEqual(rendered.count('rel="noopener noreferrer"'), 1)
         self.assertIn('下载 YITOKEN Studio', rendered)
         self.assertNotIn('预发布', rendered)
         self.assertEqual(rendered, namespace['add_site_download_entries'](rendered, 'home.html'))
@@ -51,6 +54,10 @@ class PatchShellTests(unittest.TestCase):
         self.assertIn('FAQ original', rendered); self.assertIn('Original copyright', rendered)
         self.assertEqual(rendered.count('href="/downloads/"'), 2)
         self.assertEqual(rendered.count('>桌面创作客户端</a>'), 2)
+        self.assertIn('<a href="/downloads/" target="_blank" rel="noopener noreferrer">桌面创作客户端</a></nav>', rendered)
+        self.assertIn('<span> · <a href="/downloads/">桌面创作客户端</a></span></footer>', rendered)
+        self.assertEqual(rendered.count('target="_blank"'), 1)
+        self.assertEqual(rendered.count('rel="noopener noreferrer"'), 1)
         self.assertNotIn('<script', rendered)
         self.assertEqual(namespace['add_site_download_entries'](old, '404.html'), old)
 
@@ -99,6 +106,35 @@ class PatchShellTests(unittest.TestCase):
             for changed in [source.replace('    pages = {}\n', '    pages = dict()\n'),
                             source.replace('    pages = {}\n', '    pages = {}\n    pages = {}\n')]:
                 with self.assertRaises(ValueError): patch_generator(changed, URL)
+
+    def test_same_url_legacy_nav_upgrade_is_scoped_and_idempotent(self):
+        current = patch_generator(BASE, URL)
+        attributes = ' target="_blank" rel="noopener noreferrer"'
+        old_home = '\'<nav aria-label="桌面创作客户端"><a href="/downloads/">桌面创作客户端</a></nav>\''
+        old_faq = '\'<a href="/downloads/">桌面创作客户端</a></nav>\''
+        user_code = '\nUSER_NAV = ' + old_home + '\n'
+        current = current.replace(old_home, old_home.replace('href="/downloads/"', 'href="/downloads/"' + attributes))
+        current = current.replace(old_faq, old_faq.replace('href="/downloads/"', 'href="/downloads/"' + attributes))
+        helper_note = '# User helper note: <a href="/downloads/">用户导航说明</a></nav>\n'
+        expected = current.replace('# YITOKEN_SITE_DOWNLOAD_ENTRY_END', helper_note + '# YITOKEN_SITE_DOWNLOAD_ENTRY_END') + user_code
+        legacy = expected.replace(attributes, '')
+        for source in [legacy, legacy.replace(APP_SHELL_ASSIGNMENT, '')]:
+            upgraded = patch_generator(source, URL)
+            self.assertEqual(upgraded, expected)
+            self.assertEqual(upgraded, patch_generator(upgraded, URL))
+            namespace = {}; exec(upgraded, namespace)
+            home = '<html><div id="seo-content">Original</div><script>original()</script></html>'
+            faq = '<html><nav>Original</nav><footer>Copyright</footer></html>'
+            self.assertIn(attributes, namespace['add_site_download_entries'](home, 'home.html'))
+            self.assertIn(attributes, namespace['add_site_download_entries'](faq, 'faq.html'))
+            self.assertEqual(namespace['USER_NAV'], old_home[1:-1])
+
+    def test_same_url_unknown_or_duplicate_nav_literals_are_rejected(self):
+        current = patch_generator(BASE, URL)
+        nav = '\'<a href="/downloads/" target="_blank" rel="noopener noreferrer">桌面创作客户端</a></nav>\''
+        for source in [current.replace(nav, nav.replace('noopener noreferrer', 'noopener')),
+                       current.replace(nav, nav + '\n        duplicate_nav = ' + nav)]:
+            with self.assertRaises(ValueError): patch_generator(source, URL)
 
     def test_different_url_patch_is_not_automatically_replaced(self):
         patched = patch_generator(BASE, URL)

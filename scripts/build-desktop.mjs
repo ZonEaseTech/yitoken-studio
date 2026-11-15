@@ -1,9 +1,11 @@
 // YITOKEN changes: verify source-built media and notices before any desktop build.
 import { spawnSync } from 'node:child_process';
-import { readFile, mkdir, lstat, mkdtemp } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, lstat, mkdtemp } from 'node:fs/promises';
 import { dirname, resolve, join, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { desktopMediaTarget, prepareDesktopResources, verifyPackagedDesktopResources, finalizeDesktopOutput } from './desktop-media.mjs';
+import { desktopMediaTarget, prepareDesktopResources, verifyPackagedDesktopResources, verifyMacPreSignProof, finalizeDesktopOutput } from './desktop-media.mjs';
+
+import { prepareMacSigning, verifyMacSigningOutput } from './mac-signing.mjs';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 async function localCli(root, dependency, command) {
@@ -27,6 +29,8 @@ export async function buildDesktop({ root = projectRoot, args = process.argv.sli
   const requestedTargets = [...new Set(parsed.filter(value => platforms.has(value)))];
   if (requestedTargets.length > 1) throw new Error('Build one explicit desktop platform per invocation');
   const target = requestedTargets[0] || { darwin: 'mac', win32: 'win', linux: 'linux' }[platform];
+  if (target === 'mac' && platform !== 'darwin') throw new Error('Mac signing and package verification require a native macOS build host');
+  const macSigning = target === 'mac' ? await prepareMacSigning({ root, environment }) : null;
   const requestedArchs = [...new Set(parsed.filter(value => arches.has(value)))];
   const buildArchs = requestedArchs.length ? requestedArchs : [arch];
   const mediaTargets = buildArchs.map(value => desktopMediaTarget(target, value));
@@ -37,8 +41,9 @@ export async function buildDesktop({ root = projectRoot, args = process.argv.sli
   const viteCli = await localCli(root, 'electron-vite', 'electron-vite');
   const builderCli = await localCli(root, 'electron-builder', 'electron-builder');
   const cache = join(root, '.cache'), release = join(root, 'release');
-  const env = { ...environment, TEMP: join(cache, 'tmp'), TMP: join(cache, 'tmp'), ELECTRON_CACHE: join(cache, 'electron'), ELECTRON_BUILDER_CACHE: join(cache, 'electron-builder'), CSC_IDENTITY_AUTO_DISCOVERY: 'false' };
-  for (const name of ['CSC_LINK', 'CSC_KEY_PASSWORD', 'CSC_NAME', 'WIN_CSC_LINK', 'WIN_CSC_KEY_PASSWORD']) delete env[name];
+  const env = { ...(macSigning?.environment || environment), TEMP: join(cache, 'tmp'), TMP: join(cache, 'tmp'), ELECTRON_CACHE: join(cache, 'electron'), ELECTRON_BUILDER_CACHE: join(cache, 'electron-builder'), CSC_IDENTITY_AUTO_DISCOVERY: 'false' };
+  if (!macSigning) for (const name of Object.keys(env)) if (/^(CSC_|WIN_CSC_|APPLE_|MAC_CERTIFICATE_)/.test(name)) delete env[name];
+  env.CSC_IDENTITY_AUTO_DISCOVERY = 'false';
   for (const directory of [env.TEMP, env.ELECTRON_CACHE, env.ELECTRON_BUILDER_CACHE]) await mkdir(directory, { recursive: true });
   const logo = await lstat(join(root, 'build', 'yitoken-logo.svg')).catch(() => null);
   const requiredIcons = ['icon.png', 'icon.ico', ...(target === 'mac' ? ['icon.icns'] : [])];
@@ -51,12 +56,25 @@ export async function buildDesktop({ root = projectRoot, args = process.argv.sli
     const suffix = staging.slice(staging.lastIndexOf('-') + 1);
     const destination = join(release, 'build', application.version, `${target}-${buildArch}-${stamp}-${suffix}`);
     const resourceEnvironment = { ...env, YITOKEN_VERIFIED_MEDIA_DIR: relative(root, snapshot.mediaDir), YITOKEN_VERIFIED_THIRD_PARTY_DIR: relative(root, snapshot.thirdPartyDir), YITOKEN_THIRD_PARTY_NOTICES: relative(root, snapshot.noticesFile), YITOKEN_DESKTOP_RESOURCE_PROVENANCE: relative(root, snapshot.resourceProvenanceFile) };
-    await runner(process.execPath, [builderCli, `--${target}`, `--${buildArch}`, `-c.directories.output=${staging}`], resourceEnvironment, root);
-    // Builder can exit zero after silently skipping missing extraResources. Inspect its output.
-    await verifyPackagedDesktopResources(staging, mediaTargets[index], snapshot);
+    if (macSigning) Object.assign(resourceEnvironment, {
+      YITOKEN_DESKTOP_STAGING_DIR: staging,
+      YITOKEN_DESKTOP_MEDIA_TARGET: mediaTargets[index],
+      YITOKEN_MAC_PRE_SIGN_PROOF: join(staging, 'MAC-PRE-SIGN-PROOF.json'),
+    });
+    await runner(process.execPath, [builderCli, `--${target}`, `--${buildArch}`, `-c.directories.output=${staging}`, '--publish', 'never', ...(macSigning?.builderArgs || [])], resourceEnvironment, root);
+    if (macSigning) {
+      await verifyMacPreSignProof(staging, mediaTargets[index], snapshot);
+      // Native signature and final-distribution checks precede the narrow signed-media exception.
+      const signingProof = await verifyMacSigningOutput({ staging, target: mediaTargets[index], profile: macSigning });
+      await verifyPackagedDesktopResources(staging, mediaTargets[index], snapshot, { signedMacMedia: true });
+      await writeFile(join(staging, 'MAC-SIGNING-PROVENANCE.json'), JSON.stringify(signingProof, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+    } else {
+      // Builder exit zero is not evidence that required resources were copied.
+      await verifyPackagedDesktopResources(staging, mediaTargets[index], snapshot);
+    }
     const output = await finalizeDesktopOutput(staging, destination);
     outputs.push(output);
-    console.log(`Unsigned desktop artifacts retained at ${output}`);
+    console.log(`${macSigning ? macSigning.mode + " verified Mac" : "Unsigned desktop"} artifacts retained at ${output}`);
   }
   return outputs;
 }

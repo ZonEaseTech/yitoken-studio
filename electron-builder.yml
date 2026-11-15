@@ -49,7 +49,11 @@ asarUnpack:
 icon: build/icon.ico
 
 mac:
-  identity: null # Unsigned preview builds; signing requires a separate release process.
+  # Complete local bundle signature; public release overrides this via the verified wrapper.
+  identity: "-"
+  hardenedRuntime: false
+  notarize: false
+  strictVerify: true
   icon: build/icon.icns
   artifactName: ${name}-${version}-${arch}-mac.${ext}
   target:

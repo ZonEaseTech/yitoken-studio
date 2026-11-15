@@ -232,7 +232,7 @@ func (h *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeLocal(w, r, []byte("ok\n"), "text/plain; charset=utf-8", "")
 		return
 	case "/downloads/":
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 		writeLocal(w, r, indexPage, "text/html; charset=utf-8", "")
 		return
 	case "/downloads/manifest.json":
